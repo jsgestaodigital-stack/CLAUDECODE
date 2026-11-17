@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { extractProductId, resolveProductLink, isShortLink } from '../lib/productlink.js';
+import { extractProductId, resolveProductLink, isShortLink, extractTitle } from '../lib/productlink.js';
 
 const ID = '1729384756123456789';
 
@@ -46,4 +46,16 @@ test('erros claros', async () => {
   assert.match((await resolveProductLink('https://vt.tiktok.com/ZS1/', fail)).error, /offline/);
   const none = async () => ({ url: 'https://www.tiktok.com/', text: async () => '<html></html>' });
   assert.match((await resolveProductLink('https://vt.tiktok.com/ZS1/', none)).error, /não achei o ID/);
+});
+
+test('lê o nome do produto da página', async () => {
+  assert.equal(extractTitle('<meta property="og:title" content="Escova Secadora 3 em 1 &amp; Modeladora - TikTok Shop">'), 'Escova Secadora 3 em 1 & Modeladora');
+  assert.equal(extractTitle('<title>Fone Bluetooth X | TikTok</title>'), 'Fone Bluetooth X');
+  assert.equal(extractTitle('<title>TikTok - Make Your Day</title>'), null);
+  const fake = async () => ({ url: `https://www.tiktok.com/view/product/${ID}`, text: async () => '<title>Kit Organizador 6 peças | TikTok Shop</title>' });
+  const r = await resolveProductLink(`https://www.tiktok.com/view/product/${ID}`, fake, { wantTitle: true });
+  assert.equal(r.id, ID);
+  assert.equal(r.title, 'Kit Organizador 6 peças');
+  const r2 = await resolveProductLink('https://vt.tiktok.com/ZS1/', fake);
+  assert.equal(r2.title, 'Kit Organizador 6 peças');
 });

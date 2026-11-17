@@ -350,9 +350,10 @@
       const byId = rows.filter((r) => hasId(r, productId));
       if (byId.length) return byId[0];
     }
-    if (attempt.kind === 'id') {
+    if (attempt.kind === 'id' || attempt.kind === 'link') {
       if (rows.length === 1 && listChanged) return rows[0];
-      throw new Error(`busca pelo ID ${attempt.q}: ${rows.length ? `${rows.length} resultados sem o ID visível (${list})` : 'nenhum resultado'}`);
+      const what = attempt.kind === 'id' ? `busca pelo ID ${attempt.q}` : 'link colado na busca';
+      throw new Error(`${what}: ${rows.length ? `${rows.length} resultados sem o ID visível (${list})` : 'nenhum resultado'}`);
     }
     const q = tokens(attempt.q);
     const phrase = ` ${q.join(' ')} `;
@@ -413,8 +414,9 @@
     const search = await waitFor(() => [...dlg.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].find(visible), { timeout: 20000, what: 'campo de busca de produto' });
     await human(800, 1500);
 
-    // 1º tenta pelo ID (do link); se não der, pelo nome do produto
+    // 1º cola o link do produto; depois tenta o ID; por último o nome do produto
     const attempts = [];
+    if (job.productLink && /^https?:\/\//i.test(job.productLink)) attempts.push({ q: job.productLink, kind: 'link' });
     if (job.productId) attempts.push({ q: job.productId, kind: 'id' });
     if (job.productQuery) attempts.push({ q: job.productQuery, kind: 'name' });
     let chosen = null;
@@ -423,7 +425,7 @@
       const { rows, listChanged } = await searchProducts(search, a.q);
       try {
         chosen = matchProduct(rows, a, job.productId, listChanged);
-        stepLog.push(`✓ produto encontrado pela busca ${a.kind === 'id' ? 'do ID' : 'do nome'}`);
+        stepLog.push(`✓ produto encontrado ${{ link: 'colando o link', id: 'pela busca do ID', name: 'pela busca do nome' }[a.kind]}`);
         break;
       } catch (e) {
         errors.push(e.message);

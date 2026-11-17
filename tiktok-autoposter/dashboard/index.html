@@ -43,7 +43,7 @@
     <nav aria-label="Seções">
       <button class="nav active" data-view="overview"><svg class="i"><use href="#i-home"/></svg>Visão geral</button>
       <button class="nav" data-view="products"><svg class="i"><use href="#i-box"/></svg>Produtos<span class="badge" id="navProdBadge" hidden></span></button>
-      <button class="nav" data-view="queue"><svg class="i"><use href="#i-film"/></svg>Vídeos</button>
+      <button class="nav" data-view="queue"><svg class="i"><use href="#i-film"/></svg>Vídeos<span class="badge" id="navQueueBadge" hidden></span></button>
       <button class="nav" data-view="history"><svg class="i"><use href="#i-clock"/></svg>Histórico<span class="badge" id="navHistBadge" hidden></span></button>
       <button class="nav" data-view="settings"><svg class="i"><use href="#i-sliders"/></svg>Configurações</button>
       <button class="nav" data-view="help"><svg class="i"><use href="#i-help"/></svg>Ajuda</button>
@@ -78,7 +78,7 @@
     <section class="view" id="view-overview">
       <div class="card setup" id="setupCard" hidden>
         <div class="card-h">
-          <h2><svg class="i"><use href="#i-spark"/></svg>Configuração em 4 passos</h2>
+          <h2><svg class="i"><use href="#i-spark"/></svg>Configuração passo a passo</h2>
           <span class="muted small" id="setupCount"></span>
         </div>
         <div class="setup-steps" id="setupSteps"></div>
@@ -127,14 +127,19 @@
     <!-- ============ PRODUTOS ============ -->
     <section class="view" id="view-products" hidden>
       <div class="toolbar">
-        <p class="hint grow" style="margin:0">Cada <b>subpasta</b> da sua pasta de vídeos vira um produto. Um produto só é postado depois que o <b>link do TikTok Shop</b> dele estiver configurado.</p>
-        <button class="btn small" data-act="rescan"><svg class="i"><use href="#i-refresh"/></svg>Ler pasta de novo</button>
+        <p class="hint grow" style="margin:0">Cadastre cada produto <b>uma vez</b> colando o link do TikTok Shop. Depois, na tela <b>Vídeos</b>, escolha o produto de cada pasta (ou de um vídeo específico).</p>
+        <button class="btn primary" id="btnNewProduct"><svg class="i"><use href="#i-cart"/></svg>Adicionar produto</button>
       </div>
       <div class="products" id="productsGrid"></div>
     </section>
 
     <!-- ============ VÍDEOS ============ -->
     <section class="view" id="view-queue" hidden>
+      <div class="card flush" style="margin-bottom:18px">
+        <div class="card-h" style="padding:18px 20px 0"><h2><svg class="i"><use href="#i-folder"/></svg>Pastas → produto</h2>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="muted small">Todos os vídeos da pasta usam este produto</span><button class="btn small" data-act="rescan"><svg class="i"><use href="#i-refresh"/></svg>Ler pasta de novo</button></div></div>
+        <div id="foldersBox"></div>
+      </div>
       <div class="toolbar">
         <div class="seg" id="queueFilter" role="tablist" aria-label="Filtrar vídeos">
           <button data-f="pending" class="on">Pendentes</button>
@@ -145,7 +150,7 @@
           <button data-f="missing">Sumiram</button>
           <button data-f="all">Todos</button>
         </div>
-        <select id="queueProduct" aria-label="Filtrar por produto"></select>
+        <select id="queueProduct" aria-label="Filtrar por pasta"></select>
         <input type="search" id="queueSearch" placeholder="Buscar vídeo…" aria-label="Buscar vídeo">
         <span class="grow"></span>
         <button class="btn small" id="btnRequeueFailed" hidden>Voltar todos com falha para a fila</button>
@@ -327,7 +332,7 @@
         <div class="dlg-sec">
           <h3><svg class="i"><use href="#i-text"/></svg>Legendas</h3>
           <div class="row2">
-            <label class="field"><span>Nome do produto nas legendas</span><input name="displayName" required></label>
+            <label class="field"><span>Nome do produto nas legendas</span><input name="displayName" placeholder="preenchido pelo link, se possível"></label>
             <label class="field"><span>Nicho (define as hashtags)</span><select name="niche" id="pdNiche"></select></label>
           </div>
           <label class="field"><span>Benefícios / pontos de venda <small class="muted">(um por linha — opcional)</small></span>
@@ -352,6 +357,7 @@
       </div>
       <footer>
         <label class="switch inline"><input type="checkbox" name="enabled"><i></i><span>Produto ativo</span></label>
+        <button type="button" class="btn small danger" id="pdDelete">Remover</button>
         <span class="grow"></span>
         <button class="btn" value="cancel" formnovalidate>Cancelar</button>
         <button class="btn primary" value="save" id="pdSave"><svg class="i"><use href="#i-check"/></svg>Salvar produto</button>

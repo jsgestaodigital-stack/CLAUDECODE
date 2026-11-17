@@ -169,7 +169,7 @@ main { padding: 30px 36px 70px; max-width: 1280px; width: 100%; }
 
 /* ===== Checklist de configuração ===== */
 .setup { background: var(--grad-soft), var(--surface); border-color: rgba(255, 45, 111, .3); }
-.setup-steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.setup-steps { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
 .sstep { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 18px; background: var(--surface-2); border: 1px solid var(--line); }
 .sstep .num { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; background: var(--surface-3); color: var(--text-2); }
 .sstep.done .num { background: var(--green); color: #04130c; }
@@ -351,6 +351,9 @@ dialog footer { border-top: 1px solid var(--line); }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 #toast.bad { border-color: rgba(255, 83, 112, .6); color: var(--red); }
 
+@media (max-width: 1240px) {
+  .setup-steps { grid-template-columns: repeat(3, 1fr); }
+}
 @media (max-width: 1100px) {
   .setup-steps { grid-template-columns: 1fr 1fr; }
   .stats { grid-template-columns: 1fr 1fr; }
@@ -363,3 +366,6 @@ dialog footer { border-top: 1px solid var(--line); }
   main { padding: 20px 16px 60px; }
   .act { grid-template-columns: 1fr; gap: 6px; }
 }
+
+#foldersBox .table th:first-child, #foldersBox .table td:first-child { padding-left: 20px; }
+#foldersBox select, #queueTable select { padding: 8px 12px; font-size: 13.5px; border-radius: 11px; }

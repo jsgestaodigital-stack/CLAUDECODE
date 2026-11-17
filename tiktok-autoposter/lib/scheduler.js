@@ -53,19 +53,74 @@ function sortVideos(videos, order, rand) {
   return list.sort((a, b) => a.path.localeCompare(b.path, 'pt-BR', { numeric: true }));
 }
 
-// Um produto só pode ser postado com link se a busca do produto foi configurada pelo usuário.
+// ---------------------------------------------------------------------------------------------
+// Modelo de dados
+//   catalog[key]  = produto do catálogo (link, ID, nome, nicho, legendas, memória de legendas…)
+//   folders[name] = subpasta da pasta de vídeos → { folder, displayName, catalogKey }
+//   videos[path]  = { path, folder, name, status, catalogKey? (produto só deste vídeo) … }
+// O produto de um vídeo é o dele próprio (catalogKey) ou, se não tiver, o da pasta.
+// ---------------------------------------------------------------------------------------------
+
 // Identifica a configuração do link (para saber se o teste ainda vale depois de uma edição).
-export function linkKey(product) {
-  return `${String(product?.productId || '').trim()}|${String(product?.productQuery || '').trim()}`;
+export function linkKey(item) {
+  return `${String(item?.productId || '').trim()}|${String(item?.productQuery || '').trim()}`;
 }
 
-export function isLinkReady(product) {
-  return !!(product && product.configured && (String(product.productId || '').trim() || String(product.productQuery || '').trim()));
+export function isLinkReady(item) {
+  return !!(item && item.configured && (String(item.productId || '').trim() || String(item.productQuery || '').trim()));
 }
 
-export function productBlocked(product, settings) {
-  if (!product || product.enabled === false) return true;
-  return settings?.linkProduct !== false && !isLinkReady(product);
+export function productBlocked(item, settings) {
+  if (!item || item.enabled === false) return true;
+  return settings?.linkProduct !== false && !isLinkReady(item);
+}
+
+export function productKeyOf(state, video) {
+  if (!video) return null;
+  const own = video.catalogKey && state.catalog?.[video.catalogKey] ? video.catalogKey : null;
+  if (own) return own;
+  const fk = state.folders?.[video.folder]?.catalogKey;
+  return fk && state.catalog?.[fk] ? fk : null;
+}
+
+export function itemOf(state, video) {
+  const k = productKeyOf(state, video);
+  return k ? state.catalog[k] : null;
+}
+
+export function newCatalogKey(data = {}) {
+  const id = String(data.productId || '').trim();
+  if (id) return 'id_' + id;
+  return 'p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+// Converte o formato antigo (1 produto por pasta em `products`) para catálogo + pastas.
+export function migrate(state) {
+  if (state.catalog && state.folders) return { changed: false, state };
+  const catalog = { ...(state.catalog || {}) };
+  const folders = { ...(state.folders || {}) };
+  const old = state.products || {};
+  const map = {};
+  for (const [folder, p] of Object.entries(old)) {
+    const hasConfig = p.configured || p.productUrl || p.productId || p.productQuery || p.benefits || p.captions || p.hashtags || (p.niche && p.niche !== 'geral');
+    let key = null;
+    if (hasConfig) {
+      key = newCatalogKey(p);
+      if (catalog[key]) key = key + '_' + Object.keys(catalog).length;
+      const { folder: _f, ...rest } = p;
+      catalog[key] = { ...rest, key, createdAt: p.createdAt || Date.now() };
+    }
+    map[folder] = key;
+    folders[folder] = { folder, displayName: prettifyFolderName(folder), catalogKey: key, createdAt: p.createdAt || Date.now() };
+  }
+  const videos = {};
+  for (const [path, v] of Object.entries(state.videos || {})) {
+    const { product, ...rest } = v;
+    videos[path] = { ...rest, folder: v.folder || product };
+  }
+  const runtime = { ...(state.runtime || {}) };
+  if (runtime.lastProduct && map[runtime.lastProduct] !== undefined) runtime.lastProduct = map[runtime.lastProduct];
+  return { changed: true, state: { ...state, catalog, folders, videos, runtime } };
 }
 
 export function hash(str) {
@@ -77,18 +132,19 @@ export function hash(str) {
   return h >>> 0;
 }
 
-// Retorna { product, video } do próximo post, ou null se não há nada a postar.
-// Regras: só produtos ativos com vídeos pendentes; evita repetir o último produto;
-// entre os candidatos, escolhe o que está há mais tempo sem postar (rodízio).
+// Retorna { product (chave do catálogo), video } do próximo post, ou null.
+// Regras: só vídeos pendentes com produto ativo e link configurado; evita repetir o último
+// produto; entre os candidatos, escolhe o que está há mais tempo sem postar (rodízio).
 export function pickNext(state, opts = {}) {
-  const { products = {}, videos = {}, runtime = {}, settings = {} } = state;
+  const { catalog = {}, videos = {}, runtime = {}, settings = {} } = state;
   const exclude = new Set(opts.excludePaths || []);
   const byProduct = new Map();
   for (const v of Object.values(videos)) {
     if (v.status !== 'pending' || exclude.has(v.path)) continue;
-    if (productBlocked(products[v.product], settings)) continue;
-    if (!byProduct.has(v.product)) byProduct.set(v.product, []);
-    byProduct.get(v.product).push(v);
+    const key = productKeyOf(state, v);
+    if (!key || productBlocked(catalog[key], settings)) continue;
+    if (!byProduct.has(key)) byProduct.set(key, []);
+    byProduct.get(key).push(v);
   }
   if (byProduct.size === 0) return null;
 
@@ -98,8 +154,8 @@ export function pickNext(state, opts = {}) {
 
   const lastPosted = opts.lastPostedAt || {};
   candidates.sort((a, b) => {
-    const la = lastPosted[a] ?? products[a]?.lastPostedAt ?? 0;
-    const lb = lastPosted[b] ?? products[b]?.lastPostedAt ?? 0;
+    const la = lastPosted[a] ?? catalog[a]?.lastPostedAt ?? 0;
+    const lb = lastPosted[b] ?? catalog[b]?.lastPostedAt ?? 0;
     return la - lb || a.localeCompare(b);
   });
   const product = candidates[0];
@@ -130,36 +186,21 @@ export function prettifyFolderName(folder) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Junta o resultado de uma varredura da pasta com o índice atual de vídeos e produtos.
+// Junta o resultado de uma varredura da pasta com o índice atual de vídeos e pastas.
 export function mergeScan(state, files, now = Date.now()) {
   const videos = { ...(state.videos || {}) };
-  const products = { ...(state.products || {}) };
+  const folders = { ...(state.folders || {}) };
   const seen = new Set();
   let added = 0;
   for (const f of files) {
     seen.add(f.path);
-    if (!products[f.product]) {
-      const displayName = prettifyFolderName(f.product);
-      products[f.product] = {
-        folder: f.product,
-        displayName,
-        productUrl: '',
-        productId: '',
-        productQuery: '',
-        productLabel: displayName.slice(0, 30),
-        niche: 'geral',
-        benefits: '',
-        captions: '',
-        hashtags: '',
-        configured: false,
-        enabled: true,
-        createdAt: now,
-      };
+    if (!folders[f.product]) {
+      folders[f.product] = { folder: f.product, displayName: prettifyFolderName(f.product), catalogKey: null, createdAt: now };
     }
     const prev = videos[f.path];
     if (!prev) {
       videos[f.path] = {
-        path: f.path, product: f.product, name: f.name, size: f.size,
+        path: f.path, folder: f.product, name: f.name, size: f.size,
         lastModified: f.lastModified, hasTxt: !!f.hasTxt, status: 'pending', addedAt: now,
       };
       added++;
@@ -179,5 +220,5 @@ export function mergeScan(state, files, now = Date.now()) {
       videos[path] = { ...v, gone: true };
     }
   }
-  return { videos, products, added, missing };
+  return { videos, folders, added, missing };
 }

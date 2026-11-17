@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { computeNextRun, isWithinActiveHours, pickNext, previewQueue, mergeScan, countPostedToday, isLinkReady } from '../lib/scheduler.js';
+import { computeNextRun, isWithinActiveHours, pickNext, previewQueue, mergeScan, countPostedToday, isLinkReady, productKeyOf, migrate, newCatalogKey } from '../lib/scheduler.js';
 import { DEFAULT_SETTINGS } from '../lib/defaults.js';
 
 const seq = (...v) => { let i = 0; return () => v[i++ % v.length]; };
@@ -34,38 +34,73 @@ test('next run jumps to start of active window', () => {
 
 const mkState = () => ({
   settings: DEFAULT_SETTINGS,
-  products: {
-    a: { folder: 'a', displayName: 'A', configured: true, productQuery: '111' },
-    b: { folder: 'b', displayName: 'B', configured: true, productQuery: '222' },
-    c: { folder: 'c', displayName: 'C', enabled: false, configured: true, productQuery: '333' },
-    d: { folder: 'd', displayName: 'D', configured: false, productQuery: '' },
+  catalog: {
+    A: { key: 'A', displayName: 'A', configured: true, productId: '111111' },
+    B: { key: 'B', displayName: 'B', configured: true, productQuery: 'Produto B' },
+    C: { key: 'C', displayName: 'C', enabled: false, configured: true, productId: '333333' },
+    D: { key: 'D', displayName: 'D', configured: false },
+  },
+  folders: {
+    a: { folder: 'a', catalogKey: 'A' },
+    b: { folder: 'b', catalogKey: 'B' },
+    c: { folder: 'c', catalogKey: 'C' },
+    d: { folder: 'd', catalogKey: 'D' },
+    e: { folder: 'e', catalogKey: null },
   },
   videos: {
-    'a/1.mp4': { path: 'a/1.mp4', product: 'a', status: 'pending' },
-    'a/2.mp4': { path: 'a/2.mp4', product: 'a', status: 'pending' },
-    'a/10.mp4': { path: 'a/10.mp4', product: 'a', status: 'pending' },
-    'b/1.mp4': { path: 'b/1.mp4', product: 'b', status: 'posted' },
-    'b/2.mp4': { path: 'b/2.mp4', product: 'b', status: 'pending' },
-    'c/1.mp4': { path: 'c/1.mp4', product: 'c', status: 'pending' },
-    'd/1.mp4': { path: 'd/1.mp4', product: 'd', status: 'pending' },
+    'a/1.mp4': { path: 'a/1.mp4', folder: 'a', status: 'pending' },
+    'a/2.mp4': { path: 'a/2.mp4', folder: 'a', status: 'pending' },
+    'a/10.mp4': { path: 'a/10.mp4', folder: 'a', status: 'pending' },
+    'b/1.mp4': { path: 'b/1.mp4', folder: 'b', status: 'posted' },
+    'b/2.mp4': { path: 'b/2.mp4', folder: 'b', status: 'pending' },
+    'c/1.mp4': { path: 'c/1.mp4', folder: 'c', status: 'pending' },
+    'd/1.mp4': { path: 'd/1.mp4', folder: 'd', status: 'pending' },
+    'e/1.mp4': { path: 'e/1.mp4', folder: 'e', status: 'pending' },
   },
-  runtime: { lastProduct: 'a' },
+  runtime: { lastProduct: 'A' },
 });
 
-test('pickNext rotates products, skips disabled, natural sort', () => {
+test('pickNext: rodízio por produto do catálogo, ignora pausados/sem link/sem produto, ordem natural', () => {
   const st = mkState();
   assert.equal(pickNext(st).video.path, 'b/2.mp4');
   const q = previewQueue(st, 10).map((x) => x.video.path);
   assert.deepEqual(q, ['b/2.mp4', 'a/1.mp4', 'a/2.mp4', 'a/10.mp4']);
+  assert.ok(isLinkReady(st.catalog.A) && isLinkReady(st.catalog.B) && !isLinkReady(st.catalog.D));
 });
 
-test('products without a configured link are never picked (unless linking is off)', () => {
+test('produto próprio do vídeo tem prioridade sobre o da pasta', () => {
   const st = mkState();
-  const all = previewQueue(st, 20).map((x) => x.product);
-  assert.ok(!all.includes('d'));
-  assert.ok(isLinkReady(st.products.a) && !isLinkReady(st.products.d));
+  st.videos['e/1.mp4'].catalogKey = 'B';      // pasta sem produto, vídeo com produto B
+  st.videos['a/2.mp4'].catalogKey = 'B';      // vídeo da pasta A usando o produto B
+  assert.equal(productKeyOf(st, st.videos['e/1.mp4']), 'B');
+  assert.equal(productKeyOf(st, st.videos['a/2.mp4']), 'B');
+  assert.equal(productKeyOf(st, st.videos['a/1.mp4']), 'A');
+  const q = previewQueue(st, 10);
+  const byB = q.filter((x) => x.product === 'B').map((x) => x.video.path).sort();
+  assert.deepEqual(byB, ['a/2.mp4', 'b/2.mp4', 'e/1.mp4']);
+  for (let i = 1; i < q.length; i++) if (q.filter((x) => x.product === 'A').length && q.filter((x) => x.product === 'B').length > 1) break;
+  // produto removido do catálogo → vídeo volta a usar o da pasta
+  delete st.catalog.B;
+  assert.equal(productKeyOf(st, st.videos['a/2.mp4']), 'A');
+  assert.equal(productKeyOf(st, st.videos['e/1.mp4']), null);
+});
+
+test('duas pastas com o mesmo produto: não repete o produto em seguida', () => {
+  const st = mkState();
+  st.folders.e.catalogKey = 'A';
+  st.videos['e/2.mp4'] = { path: 'e/2.mp4', folder: 'e', status: 'pending' };
+  const prods = previewQueue(st, 10).map((x) => x.product);
+  for (let i = 1; i < prods.length; i++) {
+    const rest = new Set(prods.slice(i));
+    if (rest.size > 1) assert.notEqual(prods[i], prods[i - 1], prods.join(','));
+  }
+});
+
+test('linkProduct desligado: produto sem link entra, sem produto não', () => {
+  const st = mkState();
   const off = previewQueue({ ...st, settings: { ...DEFAULT_SETTINGS, linkProduct: false } }, 20).map((x) => x.product);
-  assert.ok(off.includes('d') && !off.includes('c'));
+  assert.ok(off.includes('D') && !off.includes('C'));
+  assert.ok(!previewQueue({ ...st, settings: { ...DEFAULT_SETTINGS, linkProduct: false } }, 20).some((x) => x.video.path === 'e/1.mp4'));
 });
 
 test('pickNext returns null when nothing pending', () => {
@@ -74,19 +109,47 @@ test('pickNext returns null when nothing pending', () => {
   assert.equal(pickNext(st), null);
 });
 
-test('mergeScan creates products, marks missing, keeps posted', () => {
+test('mergeScan: cria pastas sem produto, marca sumidos, mantém publicados', () => {
   const st = mkState();
   const r = mergeScan(st, [
     { path: 'a/1.mp4', product: 'a', name: '1.mp4', size: 1 },
     { path: 'novo-produto/x.mp4', product: 'novo-produto', name: 'x.mp4', size: 2 },
   ]);
   assert.equal(r.added, 1);
-  assert.equal(r.products['novo-produto'].displayName, 'Novo produto');
-  assert.equal(r.products['novo-produto'].configured, false);
+  assert.equal(r.folders['novo-produto'].catalogKey, null);
+  assert.equal(r.folders.a.catalogKey, 'A');
+  assert.equal(r.videos['novo-produto/x.mp4'].folder, 'novo-produto');
   assert.equal(r.videos['a/2.mp4'].status, 'missing');
   assert.equal(r.videos['b/1.mp4'].status, 'posted');
-  const r2 = mergeScan({ ...st, videos: r.videos, products: r.products }, [{ path: 'a/2.mp4', product: 'a', name: '2.mp4' }]);
+  assert.equal(r.videos['b/1.mp4'].gone, true);
+  const r2 = mergeScan({ ...st, videos: r.videos, folders: r.folders }, [{ path: 'a/2.mp4', product: 'a', name: '2.mp4' }]);
   assert.equal(r2.videos['a/2.mp4'].status, 'pending');
+});
+
+test('migração da versão antiga (produto por pasta)', () => {
+  const old = {
+    products: {
+      'fone-x': { folder: 'fone-x', displayName: 'Fone X', productUrl: 'https://www.tiktok.com/view/product/1234567', productId: '1234567', configured: true, niche: 'eletronicos', recentCaptions: ['a'], enabled: true },
+      'sem-nada': { folder: 'sem-nada', displayName: 'Sem nada', niche: 'geral', configured: false },
+    },
+    videos: { 'fone-x/1.mp4': { path: 'fone-x/1.mp4', product: 'fone-x', status: 'pending' } },
+    runtime: { lastProduct: 'fone-x' },
+  };
+  const { changed, state } = migrate(old);
+  assert.ok(changed);
+  const key = state.folders['fone-x'].catalogKey;
+  assert.equal(key, 'id_1234567');
+  assert.equal(state.catalog[key].displayName, 'Fone X');
+  assert.equal(state.catalog[key].niche, 'eletronicos');
+  assert.deepEqual(state.catalog[key].recentCaptions, ['a']);
+  assert.equal(state.folders['sem-nada'].catalogKey, null);
+  assert.equal(Object.keys(state.catalog).length, 1);
+  assert.equal(state.videos['fone-x/1.mp4'].folder, 'fone-x');
+  assert.equal(state.runtime.lastProduct, key);
+  assert.equal(pickNext({ ...state, settings: DEFAULT_SETTINGS }).video.path, 'fone-x/1.mp4');
+  assert.equal(migrate(state).changed, false);
+  assert.equal(newCatalogKey({ productId: '987654' }), 'id_987654');
+  assert.match(newCatalogKey({}), /^p_/);
 });
 
 test('countPostedToday', () => {

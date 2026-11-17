@@ -38,6 +38,10 @@ function startServer() {
       return;
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    if (req.url.startsWith('/view/product/')) { // página do produto (para ler o nome)
+      const id = req.url.split('/')[3].split('?')[0];
+      return res.end(`<html><head><meta property="og:title" content="Produto Teste ${id} - TikTok Shop"></head><body></body></html>`);
+    }
     res.end(pageBody);
   });
   return new Promise((ok) => srv.listen(0, '127.0.0.1', () => ok(srv)));
@@ -118,23 +122,25 @@ async function main() {
   }, VIDEO_BYTES);
   await dash.click('[data-setup="pick"]');
   await dash.waitForFunction(() => document.querySelector('#folderBox')?.textContent.includes('Videos TikTok'));
-  let st = await get(['videos', 'products']);
-  assert(Object.keys(st.videos).length === 7 && Object.keys(st.products).length === 4, '7 vídeos e 4 produtos encontrados');
-  assert(Object.values(st.products).every((p) => !p.configured), 'nenhum produto entra na fila sem link');
-  await dash.waitForFunction(() => document.querySelector('#upcoming').textContent.includes('Configure os links'));
-  assert(true, 'fila vazia avisa para configurar os links');
+  let st = await get(['videos', 'folders', 'catalog']);
+  assert(Object.keys(st.videos).length === 7 && Object.keys(st.folders).length === 4, '7 vídeos em 4 pastas');
+  assert(Object.values(st.folders).every((f) => !f.catalogKey) && !Object.keys(st.catalog).length, 'pastas começam sem produto (nada entra na fila)');
+  await dash.waitForFunction(() => document.querySelector('#upcoming').textContent.includes('Ligue as pastas'));
+  assert(true, 'fila vazia avisa para ligar as pastas a produtos');
+  assert(await dash.isVisible('#navQueueBadge'), 'menu Vídeos mostra pastas sem produto');
   await dash.screenshot({ path: path.join(SHOTS, '01b-pasta.png') });
 
-  console.log('2) Configurar os links pelo formulário do produto');
+  console.log('2) Catálogo: adicionar produtos colando o link');
   await dash.click('[data-view="products"]');
-  assert(await dash.isVisible('#navProdBadge'), 'menu mostra quantos produtos faltam configurar');
-  async function configure(folder, extra = {}) {
-    await dash.click(`[data-edit="${folder}"]`);
+  await dash.waitForSelector('#productsGrid [data-new-product]');
+  assert(true, 'catálogo vazio mostra "Adicionar produto"');
+  async function fillProduct(extra) {
     await dash.waitForSelector('#productDlg[open]');
     if (extra.link) {
       await dash.fill('#productForm [name="productUrl"]', extra.link);
       await dash.waitForFunction(() => /✓ ID do produto|✗/.test(document.querySelector('#pdLinkStatus').textContent), null, { timeout: 15000 });
     }
+    if (extra.waitTitle) await dash.waitForFunction(() => document.querySelector('#productForm [name="displayName"]').value !== '', null, { timeout: 15000 });
     if (extra.query) await dash.fill('#productForm [name="productQuery"]', extra.query);
     if (extra.name) await dash.fill('#productForm [name="displayName"]', extra.name);
     if (extra.label) await dash.fill('#productForm [name="productLabel"]', extra.label);
@@ -143,13 +149,20 @@ async function main() {
     if (extra.shot) await dash.screenshot({ path: path.join(SHOTS, extra.shot) });
     await dash.click('#pdSave');
     await dash.waitForSelector('#productDlg:not([open])', { state: 'attached' });
-    await sleep(400);
+    await sleep(500);
   }
-  await configure('fone-bluetooth-x', { link: 'Olha esse: https://www.tiktok.com/view/product/1729384756123?region=BR&u_code=xyz', query: 'Fone Bluetooth X Pro Max', name: 'Fone Bluetooth X', label: 'Fone Bluetooth X Pro', niche: 'eletronicos', benefits: 'bateria de 30 horas\ncancelamento de ruído', shot: '03-produto.png' });
-  await configure('escova-secadora', { query: 'Escova Secadora Rotativa', niche: 'cabelo' });
-  await configure('kit-ambiguo', { query: 'ambiguo' });
-  // link curto de compartilhamento (vt.tiktok.com): a extensão segue o redirecionamento e acha o ID
-  await dash.click('[data-edit="sem-link"]');
+  // Fone: só Ctrl+V do link → ID e nome preenchidos sozinhos; depois ajusta nome/nicho/benefícios
+  await dash.click('#btnNewProduct');
+  await dash.waitForSelector('#productDlg[open]');
+  await dash.fill('#productForm [name="productUrl"]', 'Olha esse: https://www.tiktok.com/view/product/1729384756123?region=BR&u_code=xyz');
+  await dash.waitForFunction(() => document.querySelector('#productForm [name="displayName"]').value.includes('Produto Teste 1729384756123'), null, { timeout: 15000 });
+  assert((await dash.textContent('#pdLinkStatus')).includes('1729384756123'), 'colou o link → ID detectado');
+  assert(true, 'nome do produto preenchido sozinho a partir do link');
+  await fillProduct({ query: 'Fone Bluetooth X Pro Max', name: 'Fone Bluetooth X', label: 'Fone Bluetooth X Pro', niche: 'eletronicos', benefits: 'bateria de 30 horas\ncancelamento de ruído', shot: '03-produto.png' });
+  await dash.click('#btnNewProduct');
+  await fillProduct({ query: 'ambiguo', name: 'Kit ambiguo' });
+  // link curto de compartilhamento (vt.tiktok.com): segue o redirecionamento e acha o ID; cancelar não salva
+  await dash.click('#btnNewProduct');
   await dash.waitForSelector('#productDlg[open]');
   await dash.fill('#productForm [name="productUrl"]', 'https://vt.tiktok.com/ZSabc123/');
   await dash.waitForFunction(() => /✓ ID do produto|✗/.test(document.querySelector('#pdLinkStatus').textContent), null, { timeout: 15000 });
@@ -157,11 +170,34 @@ async function main() {
   assert(shortStatus.includes('1729384756999'), 'link curto vt.tiktok.com resolvido: ' + shortStatus.trim());
   await dash.click('#productForm button[value="cancel"]:not(.x)');
   await sleep(300);
-  st = await get(['products']);
-  const fone = st.products['fone-bluetooth-x'];
-  assert(fone.configured && fone.productId === '1729384756123' && fone.productUrl.includes('/product/') && fone.niche === 'eletronicos' && fone.benefits.includes('30 horas'), 'ID extraído do link colado e salvo com nicho e benefícios');
-  assert(!st.products['sem-link'].configured, 'cancelar não salva');
-  assert(!st.products['sem-link'].configured, 'produto sem link continua fora da fila');
+  // o mesmo link de novo → avisa que já existe
+  await dash.click('#btnNewProduct');
+  await fillProduct({ link: 'https://www.tiktok.com/view/product/1729384756123' });
+  st = await get(['catalog']);
+  const FONE = 'id_1729384756123';
+  const fone = st.catalog[FONE];
+  assert(fone.productUrl === 'https://www.tiktok.com/view/product/1729384756123?region=BR&u_code=xyz', 'guardou só o endereço do link (sem o texto colado junto)');
+  assert(Object.keys(st.catalog).length === 2, 'catálogo com 2 produtos (cancelado e duplicado não entram)');
+  assert(fone && fone.configured && fone.productUrl.includes('/product/') && fone.niche === 'eletronicos' && fone.benefits.includes('30 horas'), 'produto salvo com link, ID, nicho e benefícios');
+  const KIT = Object.values(st.catalog).find((c) => c.displayName === 'Kit ambiguo').key;
+
+  console.log('2b) Ligar pastas aos produtos (tela Vídeos)');
+  await dash.click('[data-view="queue"]');
+  await dash.selectOption('select[data-assign-folder="fone-bluetooth-x"]', FONE);
+  await sleep(400);
+  await dash.selectOption('select[data-assign-folder="kit-ambiguo"]', KIT);
+  await sleep(400);
+  // escova: "+ Novo produto" direto do seletor da pasta → cria e já liga
+  await dash.selectOption('select[data-assign-folder="escova-secadora"]', '__new__');
+  await fillProduct({ query: 'Escova Secadora Rotativa', name: 'Escova secadora', niche: 'cabelo' });
+  for (let i = 0; i < 30 && !(await get(['folders'])).folders['escova-secadora'].catalogKey; i++) await sleep(500);
+  st = await get(['catalog', 'folders']);
+  const ESC = st.folders['escova-secadora'].catalogKey;
+  assert(st.folders['fone-bluetooth-x'].catalogKey === FONE && st.folders['kit-ambiguo'].catalogKey === KIT, 'pastas ligadas pelo seletor');
+  assert(ESC && st.catalog[ESC].displayName === 'Escova secadora', '"+ Novo produto" no seletor criou e ligou o produto');
+  assert(!st.folders['sem-link'].catalogKey, 'pasta "sem-link" continua sem produto');
+  await dash.screenshot({ path: path.join(SHOTS, '02b-pastas.png') });
+  await dash.click('[data-view="products"]');
   await dash.screenshot({ path: path.join(SHOTS, '02-produtos.png') });
 
   console.log('3) Botão "Postar agora" do topo (produto + conteúdo de marca)');
@@ -195,18 +231,17 @@ async function main() {
   await dash.click('[data-view="queue"]');
   await dash.waitForSelector('[data-post="fone-bluetooth-x/v01.mp4"]');
   pp = nextTikTokPage();
+  const t4 = Date.now();
   await dash.click('[data-post="fone-bluetooth-x/v01.mp4"]');
   tt = await pp;
-  const nPosted = (await get(['history'])).history.length;
-  h = await waitHistory((x) => x.video === 'fone-bluetooth-x/v01.mp4' && (x.status === 'posted' || x.status === 'failed'));
+  h = await waitHistory((x) => x.ts > t4 && x.video === 'fone-bluetooth-x/v01.mp4' && (x.status === 'posted' || x.status === 'failed'));
   res = await tt.evaluate(() => window.__result);
   assert(h.status === 'posted', 'v01 publicado');
   assert(res.fileName === 'v01.mp4' && res.fileSize === VIDEO_BYTES, `arquivo chegou inteiro (${res.fileSize} bytes)`);
   assert(res.firstByte === 7 && res.lastByte === 9, 'conteúdo do arquivo íntegro');
-  assert(res.searched === '1729384756123' && res.pickedText.includes('1729384756123'), 'link pelo ID correto');
+  assert(/^https:.*1729384756123/.test(res.searches[0]) && res.pickedText.includes('1729384756123'), 'colou o link do produto na busca e escolheu o item com o ID certo');
   assert(res.productLabel === 'Fone Bluetooth X Pro', 'nome do link preenchido');
   assert(/Fone Bluetooth X/.test(res.caption) && !/v01/.test(res.caption), 'legenda sem o nome do arquivo');
-  void nPosted;
 
   console.log('5) Segurança do link: busca ambígua NÃO publica');
   pp = nextTikTokPage();
@@ -220,20 +255,20 @@ async function main() {
 
   console.log('6) Segurança do link: produto sem link não posta');
   r = await cmd('post-now', { path: 'sem-link/s1.mp4' });
-  assert(!r.ok && /link/i.test(r.error), 'recusou: ' + r.error);
+  assert(!r.ok && /produto/i.test(r.error), 'recusou vídeo sem produto: ' + r.error);
 
   console.log('7) Teste sem publicar (botão do produto)');
   await dash.click('[data-view="products"]');
-  await dash.waitForSelector('[data-test-prod="escova-secadora"]');
+  await dash.waitForSelector(`[data-test-prod="${ESC}"]`);
   pp = nextTikTokPage();
-  await dash.click('[data-test-prod="escova-secadora"]');
+  await dash.click(`[data-test-prod="${ESC}"]`);
   tt = await pp;
   h = await waitHistory((x) => x.dryRun);
   res = await tt.evaluate(() => window.__result);
   assert(h.status === 'dry-run' && h.video.startsWith('escova-secadora/'), 'teste concluído no produto certo');
   assert(!res.posted, 'teste não publicou');
-  st = await get(['products', 'videos']);
-  assert(st.products['escova-secadora'].linkTestedAt, 'produto marcado como "link conferido"');
+  st = await get(['catalog', 'videos']);
+  assert(st.catalog[ESC].linkTestedAt, 'produto marcado como "link conferido"');
   assert(st.videos[h.video].status === 'pending', 'vídeo do teste continua pendente');
   await dash.waitForFunction(() => document.querySelector('#productsGrid').textContent.includes('Link conferido'));
   await dash.screenshot({ path: path.join(SHOTS, '05-produtos-testados.png') });
@@ -290,6 +325,29 @@ async function main() {
   assert(st.videos['escova-secadora/a2.mp4'].status === 'pending', 'vídeo continua na fila');
   await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
 
+  console.log('8e) Produto só de um vídeo + remover produto do catálogo');
+  await dash.click('[data-view="queue"]');
+  await dash.click('#queueFilter [data-f="all"]');
+  await dash.selectOption('select[data-assign-video="sem-link/s1.mp4"]', FONE);
+  await sleep(400);
+  st = await get(['videos', 'folders']);
+  assert(st.videos['sem-link/s1.mp4'].catalogKey === FONE && !st.folders['sem-link'].catalogKey, 'vídeo usa o produto escolhido, pasta continua sem');
+  await dash.selectOption('select[data-assign-video="sem-link/s1.mp4"]', '');
+  await sleep(400);
+  assert(!(await get(['videos'])).videos['sem-link/s1.mp4'].catalogKey, 'voltou a usar o produto da pasta');
+  await dash.selectOption('select[data-assign-folder="sem-link"]', '__new__');
+  await fillProduct({ link: 'https://www.tiktok.com/view/product/5550001112223', waitTitle: true });
+  for (let i = 0; i < 30 && !(await get(['folders'])).folders['sem-link'].catalogKey; i++) await sleep(500);
+  st = await get(['catalog', 'folders']);
+  const TMP = st.folders['sem-link'].catalogKey;
+  if (!(TMP === 'id_5550001112223' && st.catalog[TMP]?.displayName.includes('Produto Teste'))) console.log('DEBUG', TMP, JSON.stringify(st.catalog[TMP] || Object.keys(st.catalog)), await dash.textContent('#toast'));
+  assert(TMP === 'id_5550001112223' && st.catalog[TMP].displayName.includes('Produto Teste'), 'novo produto pelo seletor só com o link (nome automático)');
+  await dash.click('[data-view="products"]');
+  await dash.click(`[data-delete-prod="${TMP}"]`);
+  await sleep(600);
+  st = await get(['catalog', 'folders']);
+  assert(!st.catalog[TMP] && !st.folders['sem-link'].catalogKey, 'produto removido e a pasta ficou sem produto');
+
   console.log('9) Configurações pela tela');
   await dash.click('[data-view="settings"]');
   await dash.click('#intervalSeg [data-v="30"]');
@@ -334,7 +392,7 @@ async function main() {
   rt = (await get(['runtime'])).runtime;
   const mins = (rt.nextRunAt - Date.now()) / 60000;
   assert(mins > 45 && mins < 70, `próximo post reagendado para daqui ~${mins.toFixed(0)} min`);
-  const { products } = await get(['products']);
+  const { catalog: products } = await get(['catalog']);
   const lastPosted = (await get(['history'])).history.find((x) => x.status === 'posted');
   assert(products[lastPosted.product].lastHashtags.length === 5 && products[lastPosted.product].recentCaptions.length >= 1, 'memória de legendas/hashtags salva no produto');
   await dash.waitForTimeout(800);
@@ -362,7 +420,7 @@ async function main() {
   h = await waitHistory((x) => x.dryRun && x.video === 'fone-bluetooth-x/v02.mp4');
   res = await tt.evaluate(() => window.__result);
   if (h.status !== 'dry-run') console.log(JSON.stringify(h, null, 2));
-  assert(h.status === 'dry-run' && res.searches.join('|') === '1729384756123|Fone Bluetooth X Pro Max' && res.pickedText.includes('Fone Bluetooth X Pro Max'), 'tentou o ID, depois achou pelo nome');
+  assert(h.status === 'dry-run' && res.searches.length === 3 && res.searches[1] === '1729384756123' && res.searches[2] === 'Fone Bluetooth X Pro Max' && res.pickedText.includes('Fone Bluetooth X Pro Max'), 'tentou o link, depois o ID e achou pelo nome');
   await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
 
   console.log('13) TikTok deslogado → pausa e avisa, vídeo continua na fila');
@@ -395,11 +453,11 @@ async function main() {
   await dash.click('#settingsForm button[type="submit"]');
   await sleep(500);
   const exp = await cmd('export');
-  assert(exp.ok && exp.data.products['fone-bluetooth-x'].productId === '1729384756123', 'backup exportado com os produtos');
-  await cmd('save-product', { folder: 'fone-bluetooth-x', data: { productUrl: '', productId: '', productQuery: '' } });
-  assert(!(await get(['products'])).products['fone-bluetooth-x'].configured, 'link apagado');
+  assert(exp.ok && exp.data.catalog[FONE].productId === '1729384756123' && exp.data.folders['fone-bluetooth-x'].catalogKey === FONE, 'backup exportado com catálogo e pastas');
+  await cmd('catalog-save', { key: FONE, data: { productUrl: '', productId: '', productQuery: '' } });
+  assert(!(await get(['catalog'])).catalog[FONE].configured, 'link apagado');
   const imp = await cmd('import', { data: exp.data });
-  assert(imp.ok && (await get(['products'])).products['fone-bluetooth-x'].productId === '1729384756123', 'backup importado restaurou o link');
+  assert(imp.ok && (await get(['catalog'])).catalog[FONE].productId === '1729384756123', 'backup importado restaurou o link');
   await dash.click('[data-view="help"]');
   const [download] = await Promise.all([dash.waitForEvent('download'), dash.click('#btnExport')]);
   assert(/autoposter-backup-.*\.json/.test(download.suggestedFilename()), 'botão Exportar baixa o arquivo ' + download.suggestedFilename());

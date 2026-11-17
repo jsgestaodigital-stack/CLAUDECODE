@@ -39,27 +39,48 @@ export function isTikTokUrl(url) {
   return /^https?:\/\/([a-z0-9-]+\.)*tiktok\.com\//i.test(url || '');
 }
 
-// Retorna { id, url, via } ou { id: null, error }.
-// `fetchImpl` permite testar sem rede.
-export async function resolveProductLink(input, fetchImpl = (typeof fetch !== 'undefined' ? fetch : null)) {
+// Nome do produto a partir do HTML da página (og:title / <title>), sem o sufixo do TikTok.
+export function extractTitle(html) {
+  const m = String(html || '').match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+    || String(html || '').match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+    || String(html || '').match(/<title[^>]*>([^<]+)<\/title>/i);
+  if (!m) return null;
+  const t = m[1]
+    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s*[-|–·]\s*(TikTok( Shop)?|Loja TikTok)[^-|–·]*$/i, '')
+    .replace(/\s+/g, ' ').trim();
+  // títulos genéricos de páginas do TikTok (login, erro, página inicial) não são nome de produto
+  if (!t || /^(tiktok|tiktok shop|loja tiktok)\b/i.test(t) || /make your day/i.test(t)) return null;
+  return t.slice(0, 120);
+}
+
+// Retorna { id, url, via, title? } ou { id: null, error }.
+// `fetchImpl` permite testar sem rede. Com `wantTitle`, abre a página para tentar ler o nome do produto.
+export async function resolveProductLink(input, fetchImpl = (typeof fetch !== 'undefined' ? fetch : null), { wantTitle = false } = {}) {
   const raw = String(input || '').trim();
   if (!raw) return { id: null, error: 'Cole o link do produto.' };
   const direct = extractProductId(raw);
-  if (direct) return { id: direct, url: firstUrl(raw), via: /^\d+$/.test(raw) ? 'id' : 'link' };
-
   const url = firstUrl(raw);
+  if (direct) {
+    const out = { id: direct, url, via: /^\d+$/.test(raw) ? 'id' : 'link' };
+    if (wantTitle && url && isTikTokUrl(url) && fetchImpl) {
+      try { out.title = extractTitle(await (await fetchImpl(url, { redirect: 'follow', credentials: 'omit' })).text()); } catch (_) { /* opcional */ }
+    }
+    return out;
+  }
   if (!url) return { id: null, error: 'Isso não parece um link nem um ID de produto.' };
   if (!isTikTokUrl(url)) return { id: null, error: 'O link precisa ser do TikTok / TikTok Shop.' };
   if (!fetchImpl) return { id: null, error: 'Não foi possível abrir o link aqui. Cole o ID do produto.' };
 
   try {
     const res = await fetchImpl(url, { redirect: 'follow', credentials: 'omit' });
-    const finalId = extractProductId(res.url);
-    if (finalId) return { id: finalId, url: res.url, via: 'redirect' };
     const html = (await res.text()).slice(0, 2_000_000);
+    const title = extractTitle(html);
+    const finalId = extractProductId(res.url);
+    if (finalId) return { id: finalId, url: res.url, via: 'redirect', title };
     for (const p of HTML_PATTERNS) {
       const m = html.match(p);
-      if (m) return { id: m[1], url: res.url, via: 'page' };
+      if (m) return { id: m[1], url: res.url, via: 'page', title };
     }
     return { id: null, error: 'Abri o link, mas não achei o ID do produto nele. Abra o produto no navegador e copie o link completo (com /product/ no endereço).' };
   } catch (e) {

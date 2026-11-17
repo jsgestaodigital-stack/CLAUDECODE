@@ -1,25 +1,25 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS } from '../lib/defaults.js';
-import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey } from '../lib/scheduler.js';
+import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey, productKeyOf, itemOf } from '../lib/scheduler.js';
 import { previewSeries, NICHES } from '../lib/captions.js';
 import { getRootHandle, saveRootHandle, permissionState } from '../lib/fsaccess.js';
-import { resolveProductLink, extractProductId } from '../lib/productlink.js';
+import { resolveProductLink, extractProductId, firstUrl } from '../lib/productlink.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const icon = (name) => `<svg class="i"><use href="#i-${name}"/></svg>`;
 
-let S = { settings: DEFAULT_SETTINGS, products: {}, videos: {}, history: [], runtime: {} };
+let S = { settings: DEFAULT_SETTINGS, catalog: {}, folders: {}, videos: {}, history: [], runtime: {} };
 let folderPerm = 'none';
 let folderName = null;
 let view = 'overview';
 let settingsDirty = false;
-const ui = { queueFilter: 'pending', queueProduct: '', queueSearch: '', histFilter: 'all' };
+const ui = { queueFilter: 'pending', queueFolder: '', queueSearch: '', histFilter: 'all' };
 
 const TITLES = {
   overview: ['Visão geral', 'Acompanhe as postagens automáticas no seu TikTok.'],
-  products: ['Produtos', 'Configure o link do TikTok Shop e as legendas de cada produto.'],
-  queue: ['Vídeos', 'Todos os vídeos encontrados na sua pasta.'],
+  products: ['Produtos', 'Seu catálogo: cole o link uma vez e use o produto em quantos vídeos quiser.'],
+  queue: ['Vídeos', 'Escolha o produto de cada pasta (ou de um vídeo específico) e acompanhe a fila.'],
   history: ['Histórico', 'Tudo o que foi publicado, testado ou falhou.'],
   settings: ['Configurações', 'Frequência, horários e como publicar.'],
   help: ['Ajuda', 'Passo a passo, links úteis e diagnóstico.'],
@@ -52,10 +52,10 @@ function toast(msg, bad = false) {
 }
 
 async function loadState() {
-  const s = await chrome.storage.local.get(['settings', 'products', 'videos', 'history', 'runtime']);
+  const s = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'videos', 'history', 'runtime']);
   const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
   settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
-  S = { settings, products: s.products || {}, videos: s.videos || {}, history: s.history || [], runtime: s.runtime || {} };
+  S = { settings, catalog: s.catalog || {}, folders: s.folders || {}, videos: s.videos || {}, history: s.history || [], runtime: s.runtime || {} };
 }
 
 async function refreshFolder() {
@@ -92,12 +92,33 @@ const STATUS = {
 };
 const pill = (st) => `<span class="pill ${STATUS[st]?.[1] || ''}">${STATUS[st]?.[0] || esc(st)}</span>`;
 
+// ---------- ajudas do catálogo ----------
+const catalogList = () => Object.values(S.catalog).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || '', 'pt-BR'));
+const nameOf = (key) => S.catalog[key]?.displayName || '';
+// pastas com vídeos pendentes que ainda não têm produto
+function foldersWithoutProduct() {
+  return Object.values(S.folders).filter((f) => !(f.catalogKey && S.catalog[f.catalogKey])
+    && Object.values(S.videos).some((v) => v.folder === f.folder && v.status === 'pending' && !v.catalogKey));
+}
+function videosOfProduct(key) {
+  return Object.values(S.videos).filter((v) => productKeyOf(S, v) === key);
+}
+function productOptions(selected, inheritLabel) {
+  const first = inheritLabel != null
+    ? `<option value="">${esc(inheritLabel)}</option>`
+    : '<option value="">— escolher produto —</option>';
+  const items = catalogList().map((c) => `<option value="${esc(c.key)}" ${c.key === selected ? 'selected' : ''}>${esc(c.displayName)}${isLinkReady(c) ? '' : ' (sem link)'}${c.enabled === false ? ' (pausado)' : ''}</option>`).join('');
+  return first + items + '<option value="__new__">＋ Novo produto (colar link)…</option>';
+}
+
 // ---------- passos de configuração ----------
 function setupSteps() {
-  const prods = Object.values(S.products);
-  const ready = prods.filter((p) => p.enabled !== false && isLinkReady(p));
+  const ready = Object.values(S.catalog).filter((p) => p.enabled !== false && isLinkReady(p));
   const vids = Object.values(S.videos).filter((v) => v.status !== 'missing').length;
   const tested = !!S.history.find((h) => h.status === 'dry-run' || h.status === 'posted');
+  const queued = previewQueue(S, 1).length > 0;
+  const withVideos = Object.values(S.folders).filter((f) => Object.values(S.videos).some((v) => v.folder === f.folder && v.status !== 'missing'));
+  const linked = withVideos.filter((f) => f.catalogKey && S.catalog[f.catalogKey]).length;
   return [
     {
       done: !!folderName && folderPerm === 'granted' && vids > 0,
@@ -107,9 +128,15 @@ function setupSteps() {
     },
     {
       done: ready.length > 0,
-      title: 'Configurar os links',
-      text: prods.length ? `${ready.length} de ${prods.filter((p) => p.enabled !== false).length} produtos com link` : 'Aparece depois de escolher a pasta',
-      btn: ['goto:products', 'Abrir produtos'],
+      title: 'Cadastrar produtos',
+      text: ready.length ? `${ready.length} produto${ready.length > 1 ? 's' : ''} no catálogo` : 'Cole o link do produto do TikTok Shop',
+      btn: ['new-product', 'Adicionar produto'],
+    },
+    {
+      done: queued,
+      title: 'Ligar pastas aos produtos',
+      text: withVideos.length ? `${linked} de ${withVideos.length} pastas com produto` : 'Depois de escolher a pasta',
+      btn: ['goto:queue', 'Escolher produtos'],
     },
     {
       done: tested,
@@ -153,11 +180,16 @@ function renderChrome() {
   $('#sideState').textContent = busy ? 'Postando agora' : rt.running ? 'Rodando' : 'Pausado';
   $('#sideInfo').textContent = `A cada ${S.settings.intervalMinutes} min · ${String(S.settings.activeStartHour).padStart(2, '0')}h às ${String(S.settings.activeEndHour).padStart(2, '0')}h`;
 
-  const needs = Object.values(S.products).filter((p) => p.enabled !== false && !isLinkReady(p)).length;
+  const needs = Object.values(S.catalog).filter((p) => p.enabled !== false && !isLinkReady(p)).length;
   const pb = $('#navProdBadge');
   pb.hidden = !needs || !S.settings.linkProduct;
   pb.textContent = needs;
   pb.title = `${needs} produto(s) sem link configurado`;
+  const orphan = foldersWithoutProduct().length;
+  const qb = $('#navQueueBadge');
+  qb.hidden = !orphan;
+  qb.textContent = orphan;
+  qb.title = `${orphan} pasta(s) com vídeos e sem produto`;
   const fails = S.history.filter((h) => (h.status === 'failed' || h.status === 'unconfirmed') && h.ts > Date.now() - 864e5).length;
   const hb = $('#navHistBadge');
   hb.hidden = !fails;
@@ -181,14 +213,14 @@ function renderBanner() {
     const n = Object.values(S.videos).filter((v) => v.status === 'unconfirmed').length;
     html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>${n} post${n > 1 ? 's' : ''} para conferir</b><span class="muted small">Cliquei em Publicar mas não vi a confirmação. Veja em “Meus posts” do TikTok Studio se saiu e marque na lista de vídeos. Esses vídeos não são repetidos automaticamente.</span></div><button class="btn small" data-goto-queue="unconfirmed">Ver vídeos</button></div>`;
   } else if (S.runtime.running && S.settings.linkProduct && !previewQueue(S, 1).length && Object.keys(S.videos).length) {
-    html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>Nada para postar agora</b><span class="muted small">Não há vídeos pendentes em produtos ativos com link configurado.</span></div><button class="btn small" data-goto="products">Ver produtos</button></div>`;
+    html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>Nada para postar agora</b><span class="muted small">Não há vídeos pendentes ligados a um produto ativo com link. Escolha o produto das pastas na tela Vídeos.</span></div><button class="btn small" data-goto="queue">Ver vídeos</button></div>`;
   }
   el.innerHTML = html;
 }
 
 function stats() {
   const vids = Object.values(S.videos);
-  const pending = vids.filter((v) => v.status === 'pending' && !productBlocked(S.products[v.product], S.settings)).length;
+  const pending = vids.filter((v) => v.status === 'pending' && !productBlocked(itemOf(S, v), S.settings)).length;
   const posted = vids.filter((v) => v.status === 'posted').length;
   const fails = S.history.filter((h) => h.status === 'failed' && h.ts > Date.now() - 864e5).length;
   return { pending, posted, fails };
@@ -201,7 +233,7 @@ function renderOverview() {
   $('#setupCard').hidden = allDone;
   if (!allDone) {
     const cur = steps.findIndex((s) => !s.done);
-    $('#setupCount').textContent = `${steps.filter((s) => s.done).length} de 4 concluídos`;
+    $('#setupCount').textContent = `${steps.filter((s) => s.done).length} de ${steps.length} concluídos`;
     $('#setupSteps').innerHTML = steps.map((s, i) => `
       <div class="sstep ${s.done ? 'done' : i === cur ? 'current' : ''}">
         <span class="num">${s.done ? '✓' : i + 1}</span>
@@ -215,7 +247,7 @@ function renderOverview() {
   $('#stToday').textContent = countPostedToday(S.history);
   $('#stTodayMax').textContent = `limite de ${S.settings.maxPerDay} por dia`;
   $('#stPending').textContent = st.pending;
-  const withQueue = new Set(Object.values(S.videos).filter((v) => v.status === 'pending' && !productBlocked(S.products[v.product], S.settings)).map((v) => v.product)).size;
+  const withQueue = new Set(Object.values(S.videos).filter((v) => v.status === 'pending' && !productBlocked(itemOf(S, v), S.settings)).map((v) => productKeyOf(S, v))).size;
   $('#stProducts').textContent = `de ${withQueue} produto${withQueue === 1 ? '' : 's'}`;
   $('#stFails').textContent = st.fails;
   $('#stTotal').textContent = `${st.posted} publicados no total`;
@@ -235,7 +267,7 @@ function renderOverview() {
   const size = files.reduce((a, v) => a + (v.size || 0), 0);
   $('#folderBox').innerHTML = folderName
     ? `<div class="folder"><div class="folder-icon">${icon('folder')}</div><div class="grow"><b>${esc(folderName)}</b>
-        <div class="muted small">${Object.keys(S.products).length} produtos · ${files.length} vídeos · ${fmtSize(size)}</div>
+        <div class="muted small">${Object.keys(S.folders).length} pastas · ${files.length} vídeos · ${fmtSize(size)}</div>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${folderPerm === 'granted' ? `<span class="pill ok">${icon('check')}Conectada</span>` : `<span class="pill bad">${icon('lock')}Sem permissão</span>`}
         ${S.runtime.lastScanAt ? `<span class="muted small">lida às ${fmtTime(S.runtime.lastScanAt)} · relida antes de cada post</span>` : ''}</div></div></div>
        <div class="folder-actions">
@@ -251,8 +283,8 @@ function renderOverview() {
   $('#intervalInfo').textContent = `a cada ${interval} min (±${S.settings.jitterMinutes})`;
   $('#upcoming').innerHTML = q.length
     ? q.map((it, i) => `<li><span class="n">${i + 1}</span><span class="t">${t ? '~' + fmtTime(t + i * interval * 60000) : '—'}</span>
-        <div style="min-width:0"><div class="p">${esc(S.products[it.product]?.displayName || it.product)}</div><div class="f">${esc(it.video.name)}</div></div></li>`).join('')
-    : `<div class="empty">${Object.keys(S.products).length ? 'Sem vídeos prontos para postar. Configure os links dos produtos ou adicione vídeos.' : 'Escolha a pasta de vídeos para montar a fila.'}</div>`;
+        <div style="min-width:0"><div class="p">${esc(nameOf(it.product) || it.product)}</div><div class="f">📁 ${esc(it.video.folder)} · ${esc(it.video.name)}</div></div></li>`).join('')
+    : `<div class="empty">${Object.keys(S.folders).length ? 'Sem vídeos prontos para postar. Ligue as pastas a produtos do catálogo (tela Vídeos).' : 'Escolha a pasta de vídeos para montar a fila.'}</div>`;
 
   $('#recent').innerHTML = historyHtml(S.history.slice(0, 5)) || '<div class="empty">Nenhuma atividade ainda.</div>';
 }
@@ -286,49 +318,80 @@ function historyHtml(list) {
 }
 
 function renderProducts() {
-  const entries = Object.values(S.products).sort((a, b) => (isLinkReady(a) - isLinkReady(b)) || a.displayName.localeCompare(b.displayName, 'pt-BR'));
+  const entries = catalogList();
   if (!entries.length) {
-    $('#productsGrid').innerHTML = `<div class="empty" style="grid-column:1/-1">Nenhum produto ainda. Escolha a pasta de vídeos (uma subpasta por produto).<br><button class="btn primary" data-act="pick">${icon('folder')}Escolher pasta</button></div>`;
+    $('#productsGrid').innerHTML = `<div class="empty" style="grid-column:1/-1">Seu catálogo está vazio. Cole o link de um produto do TikTok Shop para começar.<br><button class="btn primary" data-new-product="1">${icon('cart')}Adicionar produto</button></div>`;
     return;
   }
   $('#productsGrid').innerHTML = entries.map((p) => {
-    const vids = Object.values(S.videos).filter((v) => v.product === p.folder);
+    const vids = videosOfProduct(p.key);
     const c = (s) => vids.filter((v) => v.status === s).length;
-    const total = vids.filter((v) => v.status !== 'missing').length || 1;
-    const pct = Math.round((c('posted') / total) * 100);
+    const total = vids.filter((v) => v.status !== 'missing').length;
+    const pct = total ? Math.round((c('posted') / total) * 100) : 0;
+    const folders = Object.values(S.folders).filter((f) => f.catalogKey === p.key).map((f) => f.folder);
     const ready = isLinkReady(p);
     const off = p.enabled === false;
     let badge;
     if (off) badge = '<span class="pill">Pausado</span>';
     else if (!ready) badge = `<span class="pill warn">${icon('alert')}Falta o link</span>`;
+    else if (!total) badge = '<span class="pill">Sem vídeos ligados</span>';
     else if (!c('pending')) badge = '<span class="pill">Sem vídeos novos</span>';
     else badge = '<span class="pill ok">Na fila</span>';
     const tested = p.linkTestedAt && p.linkTestedKey === linkKey(p);
     const niche = NICHES[p.niche]?.name || NICHES.geral.name;
+    const safeUrl = /^https:\/\/([a-z0-9-]+\.)*tiktok\.com\//i.test(p.productUrl || '') ? p.productUrl : '';
     return `<div class="product ${off ? 'off' : ''} ${!ready && !off ? 'needs' : ''}">
-      <div class="top"><div style="min-width:0"><h3>${esc(p.displayName)}</h3><div class="folder-name">📁 ${esc(p.folder)}</div></div>${badge}</div>
+      <div class="top"><div style="min-width:0"><h3>${esc(p.displayName)}</h3><div class="folder-name">${folders.length ? '📁 ' + folders.map(esc).join(' · ') : 'Nenhuma pasta ligada'}</div></div>${badge}</div>
       <div class="bar" title="${pct}% publicado"><i style="width:${pct}%"></i></div>
       <div class="counts"><div><b>${c('pending')}</b>pendentes</div><div><b>${c('posted')}</b>publicados</div><div><b>${c('failed')}</b>falhas</div></div>
       <div class="linkbox">
-        ${ready ? (p.productId ? `<div class="row">${icon('cart')}ID <b>${esc(p.productId)}</b></div>` : '') + (p.productQuery ? `<div class="row">${icon('text')}<span>Nome: <b>${esc(p.productQuery)}</b></span></div>` : '') + (!p.productId ? `<div class="row small" style="color:var(--yellow)">${icon('alert')}Sem link: só busca pelo nome</div>` : '') : `<div class="row">${icon('cart')}<span style="color:var(--yellow)">Link não configurado</span></div>`}
+        ${p.productId ? `<div class="row">${icon('cart')}<span>ID <b>${esc(p.productId)}</b>${safeUrl ? ` · <a href="${esc(safeUrl)}" target="_blank" rel="noopener">abrir ↗</a>` : ''}</span></div>` : ''}
+        ${p.productQuery ? `<div class="row">${icon('text')}<span>Nome: <b>${esc(p.productQuery)}</b></span></div>` : ''}
+        ${!ready ? `<div class="row">${icon('alert')}<span style="color:var(--yellow)">Cole o link do produto</span></div>` : !p.productId ? `<div class="row small" style="color:var(--yellow)">${icon('alert')}Sem link: só busca pelo nome</div>` : ''}
         ${ready ? `<div class="row">${icon('shield')}${tested ? `<span style="color:var(--green)">Link conferido ${fmtWhen(p.linkTestedAt)}</span>` : '<span class="muted">Ainda não testado — faça um teste</span>'}</div>` : ''}
         ${tested && p.linkTestedMatch ? `<div class="row muted small" title="${esc(p.linkTestedMatch)}">↳ ${esc(p.linkTestedMatch.slice(0, 60))}</div>` : ''}
         <div class="row">${icon('hash')}${esc(niche)}${p.hashtags?.trim() ? ' + hashtags próprias' : ''}</div>
       </div>
       <div class="btns">
-        <button class="btn small ${ready ? '' : 'primary'}" data-edit="${esc(p.folder)}">${ready ? 'Editar' : 'Configurar link'}</button>
-        ${ready && c('pending') ? `<button class="btn small" data-test-prod="${esc(p.folder)}">${icon('flask')}Testar</button>` : ''}
-        <button class="btn small ghost" data-toggle-prod="${esc(p.folder)}">${off ? 'Ativar' : 'Pausar'}</button>
+        <button class="btn small ${ready ? '' : 'primary'}" data-edit="${esc(p.key)}">${ready ? 'Editar' : 'Colar link'}</button>
+        ${ready && c('pending') ? `<button class="btn small" data-test-prod="${esc(p.key)}">${icon('flask')}Testar</button>` : ''}
+        <button class="btn small ghost" data-toggle-prod="${esc(p.key)}">${off ? 'Ativar' : 'Pausar'}</button>
+        <button class="btn small danger" data-delete-prod="${esc(p.key)}" aria-label="Remover ${esc(p.displayName)}">Remover</button>
       </div>
     </div>`;
   }).join('');
 }
 
+function renderFolders() {
+  const folders = Object.values(S.folders).sort((a, b) => a.folder.localeCompare(b.folder, 'pt-BR', { numeric: true }));
+  if (!folders.length) {
+    $('#foldersBox').innerHTML = `<div class="empty">Nenhuma pasta ainda. Escolha a pasta de vídeos na Visão geral.</div>`;
+    return;
+  }
+  $('#foldersBox').innerHTML = `<table class="table"><thead><tr><th>Pasta</th><th>Vídeos</th><th>Produto do catálogo</th><th><span class="sr">Situação</span></th></tr></thead><tbody>${
+    folders.map((f) => {
+      const vids = Object.values(S.videos).filter((v) => v.folder === f.folder && v.status !== 'missing');
+      const pend = vids.filter((v) => v.status === 'pending').length;
+      const item = f.catalogKey ? S.catalog[f.catalogKey] : null;
+      const state = !item ? `<span class="pill warn">${icon('alert')}Sem produto</span>`
+        : item.enabled === false ? '<span class="pill">Produto pausado</span>'
+          : !isLinkReady(item) ? '<span class="pill warn">Produto sem link</span>'
+            : '<span class="pill ok">Pronto</span>';
+      return `<tr>
+        <td class="file">📁 ${esc(f.folder)}</td>
+        <td class="muted">${vids.length} (${pend} pendentes)</td>
+        <td style="min-width:260px"><select data-assign-folder="${esc(f.folder)}" aria-label="Produto da pasta ${esc(f.folder)}">${productOptions(item ? f.catalogKey : '', null)}</select></td>
+        <td>${state}</td></tr>`;
+    }).join('')
+  }</tbody></table>`;
+}
+
 function renderQueue() {
+  renderFolders();
   const sel = $('#queueProduct');
-  const opts = ['<option value="">Todos os produtos</option>', ...Object.values(S.products).map((p) => `<option value="${esc(p.folder)}">${esc(p.displayName)}</option>`)].join('');
+  const opts = ['<option value="">Todas as pastas</option>', ...Object.values(S.folders).map((f) => `<option value="${esc(f.folder)}">📁 ${esc(f.folder)}</option>`)].join('');
   if (sel.dataset.sig !== opts) { sel.innerHTML = opts; sel.dataset.sig = opts; }
-  sel.value = ui.queueProduct;
+  sel.value = ui.queueFolder;
   const counts = {};
   for (const v of Object.values(S.videos)) counts[v.status] = (counts[v.status] || 0) + 1;
   counts.all = Object.keys(S.videos).length;
@@ -343,7 +406,7 @@ function renderQueue() {
   const q = ui.queueSearch.toLowerCase();
   const list = Object.values(S.videos)
     .filter((v) => ui.queueFilter === 'all' || v.status === ui.queueFilter)
-    .filter((v) => !ui.queueProduct || v.product === ui.queueProduct)
+    .filter((v) => !ui.queueFolder || v.folder === ui.queueFolder)
     .filter((v) => !q || v.path.toLowerCase().includes(q))
     .sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0) || a.path.localeCompare(b.path, 'pt-BR', { numeric: true }));
 
@@ -351,14 +414,15 @@ function renderQueue() {
     $('#queueTable').innerHTML = '<tbody><tr><td><div class="empty">Nenhum vídeo aqui.</div></td></tr></tbody>';
     return;
   }
-  $('#queueTable').innerHTML = `<thead><tr><th>Vídeo</th><th>Produto</th><th>Tamanho</th><th>Status</th><th><span class="sr">Ações</span></th></tr></thead><tbody>${
+  $('#queueTable').innerHTML = `<thead><tr><th>Vídeo</th><th>Produto</th><th>Status</th><th><span class="sr">Ações</span></th></tr></thead><tbody>${
     list.slice(0, 500).map((v) => {
-      const p = S.products[v.product];
-      const blocked = v.status === 'pending' && productBlocked(p, S.settings);
+      const item = itemOf(S, v);
+      const folderItem = S.folders[v.folder]?.catalogKey && S.catalog[S.folders[v.folder].catalogKey];
+      const blocked = v.status === 'pending' && productBlocked(item, S.settings);
+      const reason = !item ? 'escolha o produto' : item.enabled === false ? 'produto pausado' : 'produto sem link';
       return `<tr>
-      <td class="file" title="${esc(v.path)}">${esc(v.name)}${v.hasTxt ? ' <span class="pill info" title="tem legenda própria (.txt)">txt</span>' : ''}${v.lastError ? `<div class="small" style="color:var(--red);white-space:normal">${esc(v.lastError)}</div>` : ''}</td>
-      <td>${esc(p?.displayName || v.product)}${blocked ? `<div class="small" style="color:var(--yellow)">${p?.enabled === false ? 'produto pausado' : 'falta configurar o link'}</div>` : ''}</td>
-      <td class="muted">${v.size ? fmtSize(v.size) : ''}</td>
+      <td class="file" title="${esc(v.path)}">${esc(v.name)}${v.hasTxt ? ' <span class="pill info" title="tem legenda própria (.txt)">txt</span>' : ''}<div class="muted small">📁 ${esc(v.folder)}${v.size ? ' · ' + fmtSize(v.size) : ''}</div>${v.lastError ? `<div class="small" style="color:var(--red);white-space:normal">${esc(v.lastError)}</div>` : ''}</td>
+      <td style="min-width:220px"><select data-assign-video="${esc(v.path)}" aria-label="Produto do vídeo ${esc(v.name)}">${productOptions(v.catalogKey && S.catalog[v.catalogKey] ? v.catalogKey : '', `Igual à pasta (${folderItem ? folderItem.displayName : 'sem produto'})`)}</select>${blocked ? `<div class="small" style="color:var(--yellow)">${reason}</div>` : ''}</td>
       <td>${pill(v.status)}${v.postedAt ? `<div class="muted small">${fmtWhen(v.postedAt)}</div>` : ''}</td>
       <td><div class="row-actions">
         ${v.status === 'pending' && !blocked ? `<button class="btn small" data-post="${esc(v.path)}">Postar agora</button><button class="btn small" data-dry="${esc(v.path)}">Testar</button>` : ''}
@@ -443,21 +507,28 @@ async function saveSettings(e) {
 }
 
 // ---------- produto ----------
-let editing = null;
-let linkCheck = 0; // evita que uma checagem antiga sobrescreva a mais nova
-function openProduct(folder) {
-  const p = S.products[folder];
-  if (!p) return;
-  editing = folder;
+let editing = null;      // chave do produto em edição ('' = novo)
+let assignAfter = null;  // { folder?, paths? } para ligar o produto novo
+let linkCheck = 0;       // evita que uma checagem antiga sobrescreva a mais nova
+function openProduct(key, assign = null) {
+  const p = key ? S.catalog[key] : null;
+  if (key && !p) return;
+  editing = key || '';
+  assignAfter = assign;
   const f = $('#productForm');
-  $('#pdTitle').textContent = p.displayName;
-  $('#pdFolder').textContent = `📁 ${p.folder}`;
+  f.reset();
+  $('#pdTitle').textContent = p ? p.displayName : 'Novo produto';
+  const usedIn = p ? Object.values(S.folders).filter((x) => x.catalogKey === p.key).map((x) => x.folder) : [];
+  $('#pdFolder').textContent = assign?.folder ? `Será ligado à pasta 📁 ${assign.folder}`
+    : assign?.paths ? `Será ligado ao vídeo ${assign.paths[0].split('/').pop()}`
+      : usedIn.length ? `Usado em: 📁 ${usedIn.join(' · ')}` : p ? 'Ainda não está ligado a nenhuma pasta' : 'Cole o link e salve. Depois escolha o produto nas pastas (tela Vídeos).';
   $('#pdNiche').innerHTML = Object.entries(NICHES).map(([k, n]) => `<option value="${k}">${esc(n.name)}</option>`).join('');
-  for (const k of ['displayName', 'productUrl', 'productId', 'productQuery', 'productLabel', 'captions', 'hashtags', 'benefits']) f[k].value = p[k] || '';
-  // produtos antigos guardavam o ID no campo de busca
-  if (!p.productUrl && !p.productId && /^\d{6,}$/.test(p.productQuery || '')) { f.productUrl.value = p.productQuery; f.productId.value = p.productQuery; f.productQuery.value = ''; }
-  f.niche.value = NICHES[p.niche] ? p.niche : 'geral';
-  f.enabled.checked = p.enabled !== false;
+  for (const k of ['displayName', 'productUrl', 'productId', 'productQuery', 'productLabel', 'captions', 'hashtags', 'benefits']) f[k].value = p?.[k] || '';
+  if (p && !p.productUrl && !p.productId && /^\d{6,}$/.test(p.productQuery || '')) { f.productUrl.value = p.productQuery; f.productId.value = p.productQuery; f.productQuery.value = ''; }
+  f.niche.value = NICHES[p?.niche] ? p.niche : 'geral';
+  f.enabled.checked = p ? p.enabled !== false : true;
+  $('#pdDelete').hidden = !p;
+  $('#pdSave').innerHTML = `${icon('check')}${p ? 'Salvar produto' : 'Adicionar ao catálogo'}`;
   showLinkStatus();
   updateProductHints();
   renderPreview();
@@ -467,8 +538,8 @@ function openProduct(folder) {
 function formProduct() {
   const f = $('#productForm');
   return {
-    displayName: f.displayName.value.trim() || S.products[editing]?.displayName || '',
-    productUrl: f.productUrl.value.trim(),
+    displayName: f.displayName.value.trim(),
+    productUrl: firstUrl(f.productUrl.value) || f.productUrl.value.trim(), // só o endereço, sem o texto em volta
     productId: f.productId.value.trim(),
     productQuery: f.productQuery.value.trim(),
     productLabel: f.productLabel.value.trim().slice(0, 30),
@@ -491,7 +562,7 @@ function showLinkStatus() {
   if (id) setLinkStatus(`✓ ID do produto: ${id}`, 'var(--green)');
   else if (url) setLinkStatus('Verificando o link…', 'var(--muted)');
   else if (f.productQuery.value.trim()) setLinkStatus('Sem link: a busca será só pelo nome (menos seguro). Cole o link para garantir.', 'var(--yellow)');
-  else setLinkStatus('Obrigatório para postar com o carrinho.', 'var(--yellow)');
+  else setLinkStatus('Copie o link do produto no TikTok Shop (Ctrl+C) e cole aqui (Ctrl+V).', 'var(--muted)');
 }
 // Lê o ID do link colado (links curtos são abertos para descobrir o destino).
 async function checkLink() {
@@ -499,29 +570,57 @@ async function checkLink() {
   const url = f.productUrl.value.trim();
   const my = ++linkCheck;
   if (!url) { f.productId.value = ''; showLinkStatus(); return; }
+  const wantTitle = !f.displayName.value.trim();
   const quick = extractProductId(url);
-  if (quick) { f.productId.value = quick; showLinkStatus(); return quick; }
+  if (quick) {
+    f.productId.value = quick;
+    showLinkStatus();
+    if (wantTitle) resolveProductLink(url, fetch, { wantTitle: true }).then((r) => { if (my === linkCheck) fillTitle(r.title); });
+    return quick;
+  }
   f.productId.value = '';
   setLinkStatus('Abrindo o link para achar o ID do produto…', 'var(--muted)');
-  const r = await resolveProductLink(url);
+  const r = await resolveProductLink(url, fetch, { wantTitle });
   if (my !== linkCheck) return;
-  if (r.id) { f.productId.value = r.id; showLinkStatus(); return r.id; }
+  if (r.id) { f.productId.value = r.id; showLinkStatus(); fillTitle(r.title); return r.id; }
   setLinkStatus('✗ ' + r.error, 'var(--red)');
   return null;
+}
+// Preenche o nome do produto a partir da página do link (só campos vazios).
+function fillTitle(title) {
+  if (!title) return;
+  const f = $('#productForm');
+  if (!f.displayName.value.trim()) f.displayName.value = title.slice(0, 60);
+  if (!f.productQuery.value.trim()) f.productQuery.value = title;
+  if (!f.productLabel.value.trim()) f.productLabel.value = title.slice(0, 30);
+  updateProductHints();
+  renderPreview();
 }
 let linkTimer;
 function updateProductHints() {
   $('#pdLabelCount').textContent = $('#productForm').productLabel.value.length;
 }
 function renderPreview() {
-  if (!editing) return;
-  const p = { ...S.products[editing], ...formProduct() };
+  if (editing == null) return;
+  const data = formProduct();
+  const p = { ...(S.catalog[editing] || {}), ...data, displayName: data.displayName || 'seu produto' };
   const series = previewSeries(p, S.settings, 3);
   $('#pdPreview').innerHTML = series.map((r, i) => {
     const prev = i ? series[i - 1].hashtags : null;
     const tags = r.hashtags.map((t) => `<span class="${prev && !prev.includes(t) ? 'new' : ''}">${esc(t)}</span>`).join(' ');
     return `<div class="ex"><span class="k">Post ${i + 1}</span>${esc(r.body)}${tags ? `\n\n<span class="tags">${tags}</span>` : ''}</div>`;
   }).join('');
+}
+
+async function deleteProduct(key) {
+  const p = S.catalog[key];
+  if (!p) return;
+  const nf = Object.values(S.folders).filter((f) => f.catalogKey === p.key).length;
+  const nv = Object.values(S.videos).filter((v) => v.catalogKey === p.key).length;
+  const extra = nf || nv ? ` ${nf ? `${nf} pasta(s)` : ''}${nf && nv ? ' e ' : ''}${nv ? `${nv} vídeo(s)` : ''} ficarão sem produto e não serão postados até você escolher outro.` : '';
+  if (!confirm(`Remover "${p.displayName}" do catálogo?${extra}`)) return;
+  const r = await send('catalog-delete', { key: p.key });
+  if (r.ok) toast('Produto removido');
 }
 
 // ---------- pasta ----------
@@ -532,7 +631,7 @@ async function pickFolder() {
     await refreshFolder();
     const r = await send('rescan');
     await loadState();
-    if (r.ok) toast(`Pasta conectada: ${r.total} vídeos em ${Object.keys(S.products).length} produtos`);
+    if (r.ok) toast(`Pasta conectada: ${r.total} vídeos em ${Object.keys(S.folders).length} pastas`);
     render();
   } catch (e) {
     if (e.name !== 'AbortError') toast('Não foi possível abrir a pasta: ' + e.message, true);
@@ -559,16 +658,16 @@ async function rescan() {
 async function toggleRun() {
   if (S.runtime.running) { if ((await send('pause')).ok) toast('Pausado'); return; }
   if (folderPerm !== 'granted') { toast('Conecte a pasta de vídeos primeiro.', true); return; }
-  if (!previewQueue(S, 1).length) { toast('Nada para postar: configure o link de pelo menos um produto com vídeos pendentes.', true); return; }
+  if (!previewQueue(S, 1).length) { toast('Nada para postar: ligue as pastas a produtos do catálogo (tela Vídeos).', true); return; }
   if ((await send('start')).ok) toast('Iniciado! O primeiro post sai em cerca de 1 minuto.');
 }
 async function dryRun(path) {
-  if (!path && !previewQueue(S, 1).length) { toast('Nada para testar: configure o link de um produto com vídeos pendentes.', true); return; }
+  if (!path && !previewQueue(S, 1).length) { toast('Nada para testar: ligue uma pasta com vídeos a um produto do catálogo.', true); return; }
   const r = await send('dry-run', path ? { path } : {});
   if (r.ok) toast('Teste: preenchendo tudo no TikTok Studio, sem publicar…');
 }
 async function postNow(path) {
-  if (!path && !previewQueue(S, 1).length) { toast('Nada para postar: configure o link de um produto com vídeos pendentes.', true); return; }
+  if (!path && !previewQueue(S, 1).length) { toast('Nada para postar: ligue uma pasta com vídeos a um produto do catálogo.', true); return; }
   if (!confirm('Publicar agora no TikTok?')) return;
   const r = await send('post-now', path ? { path } : {});
   if (r.ok) toast('Publicando no TikTok Studio…');
@@ -603,7 +702,10 @@ document.addEventListener('click', async (e) => {
     if (setup.startsWith('goto:')) return go(setup.slice(5));
     if (setup === 'dry') return dryRun();
     if (setup === 'start') return toggleRun();
+    if (setup === 'new-product') return openProduct(null);
   }
+  if (t.dataset.newProduct) return openProduct(null);
+  if (t.dataset.deleteProd) return deleteProduct(t.dataset.deleteProd);
   if (t.dataset.act === 'pick') return pickFolder();
   if (t.dataset.act === 'reauth') return reauth();
   if (t.dataset.act === 'rescan') return rescan();
@@ -613,8 +715,8 @@ document.addEventListener('click', async (e) => {
     return v ? dryRun(v.video.path) : toast('Esse produto não tem vídeos pendentes.', true);
   }
   if (t.dataset.toggleProd) {
-    const p = S.products[t.dataset.toggleProd];
-    return send('save-product', { folder: p.folder, data: { enabled: p.enabled === false } });
+    const p = S.catalog[t.dataset.toggleProd];
+    return p && send('catalog-save', { key: p.key, data: { enabled: p.enabled === false } });
   }
   if (t.dataset.post) return postNow(t.dataset.post);
   if (t.dataset.dry) return dryRun(t.dataset.dry);
@@ -683,7 +785,27 @@ $('#btnInspect').onclick = async () => {
   if (r.ok) { out.hidden = false; out.textContent = JSON.stringify(r.diag, null, 2); }
 };
 
-$('#queueProduct').onchange = (e) => { ui.queueProduct = e.target.value; renderQueue(); };
+$('#queueProduct').onchange = (e) => { ui.queueFolder = e.target.value; renderQueue(); };
+$('#btnNewProduct').onclick = () => openProduct(null);
+
+// Escolher o produto de uma pasta / de um vídeo
+document.addEventListener('change', async (e) => {
+  const sel = e.target.closest('select[data-assign-folder], select[data-assign-video]');
+  if (!sel) return;
+  const folder = sel.dataset.assignFolder;
+  const path = sel.dataset.assignVideo;
+  if (sel.value === '__new__') {
+    renderQueue(); // volta o seletor ao valor atual
+    return openProduct(null, folder ? { folder } : { paths: [path] });
+  }
+  const r = await send('assign', folder ? { folder, catalogKey: sel.value || null } : { paths: [path], catalogKey: sel.value || null });
+  if (r.ok) toast(sel.value ? `Produto: ${nameOf(sel.value)} ✓` : folder ? 'Pasta sem produto' : 'Vídeo usa o produto da pasta');
+});
+$('#pdDelete').onclick = () => {
+  const key = editing;
+  $('#productDlg').close('cancel');
+  deleteProduct(key);
+};
 $('#queueSearch').oninput = (e) => { ui.queueSearch = e.target.value; renderQueue(); };
 
 $('#productForm').addEventListener('input', (e) => {
@@ -695,17 +817,27 @@ $('#productForm').addEventListener('input', (e) => {
 $('#productForm').addEventListener('change', (e) => { if (e.target.name === 'niche') renderPreview(); });
 $('#pdRegen').onclick = () => renderPreview();
 $('#productDlg').addEventListener('close', async () => {
-  if ($('#productDlg').returnValue === 'save' && editing) {
-    if ($('#productForm').productUrl.value.trim() && !$('#productForm').productId.value.trim()) await checkLink();
-    const data = formProduct();
-    if (data.productUrl && !data.productId) {
-      toast('Não consegui achar o ID nesse link. Confira o link (ou cole o ID) e salve de novo.', true);
-      if (!data.productQuery) data.productUrl = '';
-    }
-    const r = await send('save-product', { folder: editing, data });
-    if (r.ok && (data.productId || !data.productUrl)) toast(data.productId || data.productQuery ? 'Produto salvo ✓ — faça um teste para conferir o link' : 'Produto salvo, mas sem link ele não entra na fila', !(data.productId || data.productQuery));
-  }
+  const key = editing;
+  const assign = assignAfter;
   editing = null;
+  assignAfter = null;
+  if ($('#productDlg').returnValue !== 'save' || key == null) return;
+  const f = $('#productForm');
+  if (f.productUrl.value.trim() && !f.productId.value.trim()) await checkLink();
+  const data = formProduct();
+  if (data.productUrl && !data.productId) {
+    toast('Não consegui achar o ID nesse link. Confira o link e tente de novo.', true);
+    if (!data.productQuery) return;
+    data.productUrl = '';
+  }
+  if (!key && !data.productId && !data.productQuery && !data.displayName) { toast('Cole o link do produto para adicionar.', true); return; }
+  const r = await send('catalog-save', { key: key || null, data, assignFolder: assign?.folder, assignPaths: assign?.paths });
+  if (r.ok) {
+    toast(data.productId || data.productQuery ? (key ? 'Produto salvo ✓' : 'Produto adicionado ao catálogo ✓') + (assign ? ' e ligado' : '') : 'Produto salvo, mas sem link ele não entra na fila', !(data.productId || data.productQuery));
+  } else if (r.existingKey && assign && confirm(`Esse produto já está no catálogo como "${nameOf(r.existingKey)}". Usar ele?`)) {
+    const a = await send('assign', assign.folder ? { folder: assign.folder, catalogKey: r.existingKey } : { paths: assign.paths, catalogKey: r.existingKey });
+    if (a.ok) toast(`Produto: ${nameOf(r.existingKey)} ✓`);
+  }
 });
 
 window.addEventListener('beforeunload', (e) => { if (settingsDirty && view === 'settings') { e.preventDefault(); e.returnValue = ''; } });
@@ -724,6 +856,7 @@ document.addEventListener('visibilitychange', async () => {
 });
 
 (async () => {
+  await send('ping'); // garante que dados da versão antiga já foram convertidos
   await loadState();
   await refreshFolder();
   const hash = location.hash.slice(1);

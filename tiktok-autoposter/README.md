@@ -26,7 +26,7 @@ Tudo acontece no seu próprio Chrome, já logado, como se fosse você clicando. 
 
 ```
 Videos TikTok\
-  fone-bluetooth-x\        ← cada subpasta é um produto
+  fone-bluetooth-x\        ← uma subpasta por produto (o nome é livre)
     video-001.mp4
     video-002.mp4
     video-002.txt          ← (opcional) legenda própria para o video-002
@@ -36,31 +36,45 @@ Videos TikTok\
 ```
 
 - Formatos aceitos: `.mp4`, `.mov`, `.webm`, `.m4v`.
-- Para usar o **Google Drive**, instale o *Google Drive para computador* e escolha a pasta sincronizada (ex.: `G:\Meu Drive\Videos TikTok`). Os arquivos precisam estar disponíveis offline (botão direito → *Disponibilizar off-line*).
+- Para usar o **Google Drive**, instale o *Google Drive para computador* e escolha a pasta sincronizada (ex.: `G:\Meu Drive\Videos TikTok`). Os arquivos precisam estar disponíveis off-line (botão direito → *Disponibilizar off-line*).
 - Vídeos novos colocados na pasta entram na fila automaticamente a cada post.
+
+## Produtos: cadastre uma vez, use sempre
+
+A tela **Produtos** é o seu **catálogo**:
+
+- **Adicionar produto:** copie o link do produto no TikTok Shop (**Ctrl+C**) e cole no campo (**Ctrl+V**). Serve o link completo (`…/view/product/1729…`) ou o link curto de compartilhar (`vt.tiktok.com/…`).
+  - A extensão mostra na hora o **ID** e tenta preencher o **nome** sozinha.
+  - O resto é opcional: nicho das hashtags, benefícios, hashtags próprias e nome no carrinho (até 30 caracteres).
+  - Uma **prévia de 3 posts seguidos** mostra como as legendas vão variar.
+- **Editar, Pausar, Testar e Remover** ficam no cartão de cada produto. Colar o mesmo link duas vezes não duplica o produto.
+- Na tela **Vídeos → Pastas → produto**, escolha no seletor qual produto do catálogo cada pasta usa. A opção **“＋ Novo produto (colar link)”** cria o produto e já liga a pasta a ele.
+- Um **vídeo específico** pode usar outro produto: troque no seletor da linha do vídeo. *“Igual à pasta”* volta ao produto da pasta.
+- Ao remover um produto, as pastas e vídeos que o usavam ficam **sem produto** e não são postados até você escolher outro.
 
 ## Primeiro uso
 
-O painel abre no tema escuro e mostra uma **configuração em 4 passos**:
+O painel abre no tema escuro e mostra a **configuração passo a passo**:
 
 1. **Escolher a pasta.** Quando o Chrome perguntar, permita e, se aparecer, escolha **“Permitir em todas as visitas”**.
-2. **Configurar os links.** Em **Produtos → Configurar link**:
-   - **Link do produto:** cole o link do produto do TikTok Shop. Serve o link completo (`…/view/product/1729…`) ou o link curto de compartilhar (`vt.tiktok.com/…`). A extensão mostra na hora o **ID** que achou.
-   - **Nome do produto como aparece no TikTok Shop:** é o plano B da busca. Copie o título do produto.
-   - **Nome no link do produto:** o texto do carrinho (até 30 caracteres).
-   - **Nicho:** define as hashtags (beleza, cabelo, casa, cozinha, eletrônicos, moda, fitness, pet, infantil, saúde, carro, acessórios ou geral).
-   - **Benefícios (opcional):** um por linha. Entram nas legendas.
-   - Uma **prévia de 3 posts seguidos** mostra como as legendas e hashtags vão variar.
-3. **Fazer um teste.** Faça login no TikTok Studio neste Chrome e clique em **Testar** no produto (ou em **Testar sem publicar** no topo). A extensão preenche tudo e **não publica**; a aba fica aberta para você conferir. O produto passa a mostrar **“Link conferido”** e qual item foi vinculado.
-4. **Iniciar.** O primeiro post sai em cerca de 1 minuto.
+2. **Cadastrar produtos.** Cole os links (veja acima).
+3. **Ligar pastas aos produtos** na tela **Vídeos**.
+4. **Fazer um teste.** Faça login no TikTok Studio neste Chrome e clique em **Testar** no produto (ou em **Testar sem publicar** no topo).
+   - A extensão preenche tudo e **não publica**; a aba fica aberta para você conferir.
+   - O produto passa a mostrar **“Link conferido”** e qual item foi vinculado.
+5. **Iniciar.** O primeiro post sai em cerca de 1 minuto.
 
 **Deixe o Chrome aberto** e configure o Windows para **não suspender** (Configurações → Sistema → Energia → Suspensão: *Nunca*).
 
 ## Garantia do link certo
 
-- Um produto **só entra na fila depois que o link dele for configurado**. Sem isso, a extensão recusa postar o produto.
+- Um vídeo **só entra na fila** se tiver um produto do catálogo com link.
 - O **ID** vem do link que você colou; links curtos são abertos para descobrir o destino.
-- No TikTok Studio a extensão **busca primeiro pelo ID** e só escolhe o item que tem esse ID. Se a busca por ID não trouxer o produto, ela **busca pelo nome**. Aí só aceita um item cujo nome bate por palavras inteiras e que não mostre outro ID.
+- Na tela *Adicionar link → Produtos* do TikTok Studio (onde o TikTok obriga a escolher o produto numa lista), a extensão faz tudo sozinha:
+  1. cola o **link do produto** na busca;
+  2. se não der, busca pelo **ID**;
+  3. se não der, busca pelo **nome**.
+- Ela só escolhe o item que tem **esse ID**. Pelo nome, só aceita um item cujo nome bate por palavras inteiras e que não mostre outro ID.
 - O produto precisa estar na sua **vitrine de afiliado**.
 - Se **nada corresponder** ou houver **mais de um produto parecido**, ela **não publica** e avisa no Histórico, com a lista do que apareceu na tela.
 - Cada post registra no Histórico **qual produto foi vinculado**.

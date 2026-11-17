@@ -2,8 +2,10 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS } from './lib/defaults.js';
 import {
   computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked, linkKey,
+  migrate, productKeyOf, itemOf, newCatalogKey,
 } from './lib/scheduler.js';
 import { generateCaption, rememberCaption } from './lib/captions.js';
+import { firstUrl } from './lib/productlink.js';
 
 const MIN = 60 * 1000;
 const JOB_TIMEOUT_MS = 35 * MIN;     // limite total de uma postagem
@@ -12,19 +14,31 @@ const HISTORY_LIMIT = 800;
 
 // ---------- estado ----------
 async function load() {
-  const s = await chrome.storage.local.get(['settings', 'products', 'videos', 'history', 'runtime']);
+  const s = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'products', 'videos', 'history', 'runtime']);
   const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
   settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
-  return {
+  let state = {
     settings,
-    products: s.products || {},
+    catalog: s.catalog,
+    folders: s.folders,
+    products: s.products,
     videos: s.videos || {},
     history: s.history || [],
     runtime: { running: false, nextRunAt: null, currentJob: null, lastProduct: null, consecutiveFailures: 0, ...(s.runtime || {}) },
   };
+  // versão antiga: 1 produto por pasta → catálogo de produtos + pastas
+  const m = migrate(state);
+  if (m.changed) {
+    state = m.state;
+    await save({ catalog: state.catalog, folders: state.folders, videos: state.videos, runtime: state.runtime });
+    await chrome.storage.local.remove('products');
+  }
+  delete state.products;
+  return state;
 }
 
 const save = (patch) => chrome.storage.local.set(patch);
+const saveAll = (state, extra = {}) => save({ runtime: state.runtime, history: state.history, videos: state.videos, catalog: state.catalog, folders: state.folders, ...extra });
 
 // Fila de exclusão mútua: todas as alterações de estado passam por aqui, uma por vez.
 let chain = Promise.resolve();
@@ -127,7 +141,7 @@ async function rescan(state) {
   if (!res.ok) return res;
   const merged = mergeScan(state, res.files);
   state.videos = merged.videos;
-  state.products = merged.products;
+  state.folders = merged.folders;
   state.runtime.folderName = res.folderName;
   state.runtime.lastScanAt = Date.now();
   return { ok: true, added: merged.added, missing: merged.missing, total: res.files.length };
@@ -250,11 +264,16 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     const v = state.videos[videoPath];
     if (!v) return { ok: false, error: 'Vídeo não encontrado.' };
     if (v.status === 'missing') return { ok: false, error: 'Esse vídeo não está mais na pasta.' };
-    pick = { product: v.product, video: v };
+    const key = productKeyOf(state, v);
+    if (!key) {
+      await saveAll(state);
+      return { ok: false, error: 'Esse vídeo ainda não tem produto. Escolha o produto da pasta ou do vídeo na tela Vídeos.' };
+    }
+    pick = { product: key, video: v };
   } else if (rt.retry && state.videos[rt.retry.path]?.status === 'pending'
-    && !productBlocked(state.products[state.videos[rt.retry.path].product], state.settings)) {
+    && !productBlocked(itemOf(state, state.videos[rt.retry.path]), state.settings)) {
     const v = state.videos[rt.retry.path];
-    pick = { product: v.product, video: v };
+    pick = { product: productKeyOf(state, v), video: v };
   } else {
     rt.retry = null;
     pick = pickNext(state);
@@ -264,21 +283,25 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     rt.nextRunAt = Date.now() + 15 * MIN;
     const already = state.history[0]?.status === 'idle';
     if (!already) {
-      addHistory(state, { status: 'idle', error: 'Nenhum vídeo pendente. Adicione vídeos na pasta ou reative produtos.' });
+      addHistory(state, { status: 'idle', error: 'Nenhum vídeo pendente com produto configurado. Adicione vídeos na pasta ou escolha o produto das pastas.' });
       if (rt.running) notify('AutoPoster: fila vazia', 'Não há vídeos pendentes para postar.');
     }
-    await save({ runtime: rt, history: state.history, videos: state.videos, products: state.products });
-    return { ok: false, error: 'Nenhum vídeo pendente.' };
+    await saveAll(state);
+    return { ok: false, error: 'Nenhum vídeo pendente com produto configurado.' };
   }
 
-  const product = state.products[pick.product];
+  const product = state.catalog[pick.product];
+  if (product?.enabled === false && videoPath) {
+    await saveAll(state);
+    return { ok: false, error: `O produto "${product.displayName}" está pausado.` };
+  }
   if (state.settings.linkProduct && !isLinkReady(product)) {
-    const msg = `Configure o link do produto "${product?.displayName || pick.product}" antes de postar (Produtos → Configurar).`;
+    const msg = `Configure o link do produto "${product?.displayName || pick.product}" antes de postar (Produtos → Editar).`;
     if (!videoPath && rt.running) {
       rt.retry = null;
       rt.nextRunAt = Date.now() + MIN;
     }
-    await save({ videos: state.videos, products: state.products, runtime: rt });
+    await saveAll(state);
     return { ok: false, error: msg };
   }
   let sidecarText = null;
@@ -296,10 +319,12 @@ async function startJob(state, { dryRun, videoPath } = {}) {
   const job = {
     id: crypto.randomUUID(),
     path: pick.video.path,
+    folder: pick.video.folder,
     product: pick.product,
     productName: product.displayName,
     linkProduct: !!state.settings.linkProduct,
     productId: state.settings.linkProduct ? String(product.productId || '').trim() : '',
+    productLink: state.settings.linkProduct && product.productId ? (firstUrl(product.productUrl) || '') : '',
     productQuery: state.settings.linkProduct ? String(product.productQuery || '').trim() : '',
     linkKey: linkKey(product),
     productLabel: (product.productLabel || product.displayName || '').slice(0, 30),
@@ -321,7 +346,7 @@ async function startJob(state, { dryRun, videoPath } = {}) {
   rt.currentJob = job;
   // testes e posts manuais de outro vídeo não descartam uma nova tentativa pendente
   if (!dryRun && (!videoPath || rt.retry?.path === videoPath)) rt.retry = null;
-  await save({ runtime: rt, videos: state.videos, products: state.products });
+  await saveAll(state);
   log('start job', job.path, dryRun ? '(teste)' : '');
 
   try {
@@ -343,12 +368,12 @@ async function startJob(state, { dryRun, videoPath } = {}) {
 
 function refillExhausted(state) {
   const pendingBy = {};
-  for (const v of Object.values(state.videos)) if (v.status === 'pending') pendingBy[v.product] = true;
-  for (const [key, p] of Object.entries(state.products)) {
+  for (const v of Object.values(state.videos)) if (v.status === 'pending') pendingBy[productKeyOf(state, v)] = true;
+  for (const [key, p] of Object.entries(state.catalog)) {
     if (p.enabled === false || pendingBy[key]) continue;
     for (const v of Object.values(state.videos)) {
       // só recoloca vídeos que ainda existem na pasta
-      if (v.product === key && v.status === 'posted' && !v.gone) state.videos[v.path] = { ...v, status: 'pending', cycle: (v.cycle || 1) + 1 };
+      if (productKeyOf(state, v) === key && v.status === 'posted' && !v.gone) state.videos[v.path] = { ...v, status: 'pending', cycle: (v.cycle || 1) + 1 };
     }
   }
 }
@@ -399,7 +424,7 @@ async function finishJob(state, result) {
   rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun }, ...(rt.recentJobs || [])].slice(0, 5);
   const s = state.settings;
   const v = state.videos[job.path];
-  const product = state.products[job.product];
+  const product = state.catalog[job.product];
   const now = Date.now();
   const durationMs = now - job.startedAt;
 
@@ -412,9 +437,9 @@ async function finishJob(state, result) {
     rt.lastTestAt = now;
     rt.lastTestOk = !!result.ok;
     if (result.ok && product && job.linkProduct) {
-      state.products[job.product] = { ...product, linkTestedAt: now, linkTestedKey: job.linkKey, linkTestedMatch: result.linkedProduct || null };
+      state.catalog[job.product] = { ...product, linkTestedAt: now, linkTestedKey: job.linkKey, linkTestedMatch: result.linkedProduct || null };
     }
-    await save({ runtime: rt, history: state.history, products: state.products });
+    await saveAll(state);
     notify(result.ok ? 'Teste concluído ✅' : 'Teste falhou ❌', result.ok ? 'Tudo preenchido. A aba ficou aberta para você conferir (nada foi publicado).' : `${result.step}: ${result.error}`);
     return;
   }
@@ -441,7 +466,7 @@ async function finishJob(state, result) {
   if (result.ok) {
     if (v) state.videos[job.path] = { ...v, status: 'posted', postedAt: now, caption: job.caption };
     if (product) {
-      state.products[job.product] = {
+      state.catalog[job.product] = {
         ...product, lastPostedAt: now,
         ...rememberCaption(product, { text: job.caption, ...(job.captionMeta || {}) }),
         ...(job.linkProduct ? { linkTestedAt: now, linkTestedKey: job.linkKey, linkTestedMatch: result.linkedProduct || product.linkTestedMatch || null } : {}),
@@ -492,7 +517,7 @@ async function finishJob(state, result) {
       }
     }
   }
-  await save({ runtime: rt, history: state.history, videos: state.videos, products: state.products });
+  await saveAll(state);
   syncPower(rt, s);
 
   if (job.tabId && (result.ok ? s.closeTabAfter : false)) {
@@ -508,11 +533,11 @@ async function lateResult(state, result) {
   const v = state.videos[rec.path];
   const now = Date.now();
   if (v) state.videos[rec.path] = { ...v, status: 'posted', postedAt: now, caption: rec.caption };
-  const product = state.products[rec.product];
-  if (product) state.products[rec.product] = { ...product, lastPostedAt: now, ...rememberCaption(product, { text: rec.caption, ...(rec.captionMeta || {}) }) };
+  const product = state.catalog[rec.product];
+  if (product) state.catalog[rec.product] = { ...product, lastPostedAt: now, ...rememberCaption(product, { text: rec.caption, ...(rec.captionMeta || {}) }) };
   if (state.runtime.retry?.path === rec.path) state.runtime.retry = null;
   addHistory(state, { status: 'posted', product: rec.product, productName: rec.productName, video: rec.path, caption: rec.caption, url: result.url, log: result.log, linkedProduct: result.linkedProduct, late: true });
-  await save({ runtime: state.runtime, history: state.history, videos: state.videos, products: state.products });
+  await saveAll(state);
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -561,6 +586,8 @@ async function command(name, p) {
   const state = await load();
   const rt = state.runtime;
   switch (name) {
+    case 'ping':
+      return { ok: true };
     case 'start':
       rt.running = true;
       rt.consecutiveFailures = 0;
@@ -598,20 +625,23 @@ async function command(name, p) {
       } catch (e) { return { ok: false, error: 'Telegram: ' + e.message }; }
     }
     case 'export': {
-      const data = await chrome.storage.local.get(['settings', 'products', 'videos']);
-      return { ok: true, data: { app: 'autoposter-tiktok-shop', version: 1, exportedAt: new Date().toISOString(), ...data } };
+      const data = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'videos']);
+      return { ok: true, data: { app: 'autoposter-tiktok-shop', version: 2, exportedAt: new Date().toISOString(), ...data } };
     }
     case 'import': {
       const d = p.data || {};
-      if (d.app !== 'autoposter-tiktok-shop' || typeof d.products !== 'object') return { ok: false, error: 'Esse arquivo não é um backup do AutoPoster.' };
+      if (d.app !== 'autoposter-tiktok-shop' || (typeof d.catalog !== 'object' && typeof d.products !== 'object')) return { ok: false, error: 'Esse arquivo não é um backup do AutoPoster.' };
       const settings = { ...DEFAULT_SETTINGS, ...(d.settings || {}) };
       settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
       rt.running = false;
       rt.nextRunAt = null;
       rt.retry = null;
-      await save({ settings, products: d.products || {}, videos: d.videos || state.videos, runtime: rt });
+      // backups da versão 1 (produto por pasta) são convertidos
+      const m = migrate({ catalog: d.catalog, folders: d.folders, products: d.products, videos: d.videos || state.videos, runtime: rt });
+      await save({ settings, catalog: m.state.catalog || {}, folders: m.state.folders || {}, videos: m.state.videos || {}, runtime: rt });
+      await chrome.storage.local.remove('products');
       syncPower(rt, settings);
-      return { ok: true, products: Object.keys(d.products || {}).length };
+      return { ok: true, products: Object.keys(m.state.catalog || {}).length };
     }
     case 'post-now':
       return startJob(state, { dryRun: false, videoPath: p.path });
@@ -622,7 +652,7 @@ async function command(name, p) {
       return { ok: true };
     case 'rescan': {
       const r = await rescan(state);
-      if (r.ok) await save({ videos: state.videos, products: state.products, runtime: rt });
+      if (r.ok) await saveAll(state);
       return r;
     }
     case 'save-settings': {
@@ -634,16 +664,54 @@ async function command(name, p) {
       }
       return { ok: true };
     }
-    case 'save-product': {
-      const prev = state.products[p.folder];
-      if (!prev) return { ok: false, error: 'Produto não encontrado.' };
-      const next = { ...prev, ...p.data, folder: p.folder };
-      if ('productQuery' in p.data || 'productId' in p.data) {
-        next.configured = !!(String(next.productId || '').trim() || String(next.productQuery || '').trim());
-        if (linkKey(next) !== linkKey(prev)) next.linkTestedAt = null;
+    // Cria ou edita um produto do catálogo. Opcionalmente já liga a uma pasta / vídeos.
+    case 'catalog-save': {
+      const data = { ...(p.data || {}) };
+      const id = String(data.productId || '').trim();
+      const dup = id && Object.values(state.catalog).find((c) => c.key !== p.key && String(c.productId || '') === id);
+      if (dup) return { ok: false, error: `Esse produto já está no catálogo como "${dup.displayName}".`, existingKey: dup.key };
+      const prev = p.key ? state.catalog[p.key] : null;
+      if (p.key && !prev) return { ok: false, error: 'Produto não encontrado.' };
+      const key = prev ? p.key : newCatalogKey(data);
+      const next = { niche: 'geral', enabled: true, createdAt: Date.now(), ...(prev || {}), ...data, key };
+      if (!next.displayName) next.displayName = next.productQuery || (id ? `Produto ${id.slice(-6)}` : 'Produto');
+      if (!next.productLabel) next.productLabel = next.displayName.slice(0, 30);
+      next.configured = !!(String(next.productId || '').trim() || String(next.productQuery || '').trim());
+      if (!prev || linkKey(next) !== linkKey(prev)) next.linkTestedAt = null;
+      state.catalog[key] = next;
+      if (p.assignFolder && state.folders[p.assignFolder]) state.folders[p.assignFolder] = { ...state.folders[p.assignFolder], catalogKey: key };
+      for (const path of p.assignPaths || []) if (state.videos[path]) state.videos[path] = { ...state.videos[path], catalogKey: key };
+      await saveAll(state);
+      return { ok: true, key };
+    }
+    case 'catalog-delete': {
+      if (!state.catalog[p.key]) return { ok: false, error: 'Produto não encontrado.' };
+      if (rt.currentJob?.product === p.key) return { ok: false, error: 'Esse produto está sendo postado agora. Tente de novo em instantes.' };
+      delete state.catalog[p.key];
+      let folders = 0;
+      let videos = 0;
+      for (const [k, f] of Object.entries(state.folders)) if (f.catalogKey === p.key) { state.folders[k] = { ...f, catalogKey: null }; folders++; }
+      for (const [k, v] of Object.entries(state.videos)) if (v.catalogKey === p.key) { const { catalogKey, ...rest } = v; state.videos[k] = rest; videos++; }
+      if (rt.lastProduct === p.key) rt.lastProduct = null;
+      if (rt.retry && !productKeyOf(state, state.videos[rt.retry.path])) rt.retry = null;
+      await saveAll(state);
+      return { ok: true, folders, videos };
+    }
+    // Liga uma pasta (ou vídeos) a um produto do catálogo. catalogKey vazio = sem produto / igual à pasta.
+    case 'assign': {
+      const key = p.catalogKey && state.catalog[p.catalogKey] ? p.catalogKey : null;
+      if (p.catalogKey && !key) return { ok: false, error: 'Produto não encontrado.' };
+      if (p.folder) {
+        if (!state.folders[p.folder]) return { ok: false, error: 'Pasta não encontrada.' };
+        state.folders[p.folder] = { ...state.folders[p.folder], catalogKey: key };
       }
-      state.products[p.folder] = next;
-      await save({ products: state.products });
+      for (const path of p.paths || []) {
+        const v = state.videos[path];
+        if (!v) continue;
+        if (key) state.videos[path] = { ...v, catalogKey: key };
+        else { const { catalogKey, ...rest } = v; state.videos[path] = rest; }
+      }
+      await saveAll(state);
       return { ok: true };
     }
     case 'set-video-status': {
