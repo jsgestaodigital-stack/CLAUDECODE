@@ -157,3 +157,28 @@ test('countPostedToday', () => {
   const h = [{ status: 'posted', ts: now - 3600e3 }, { status: 'failed', ts: now }, { status: 'posted', ts: now - 86400e3 }];
   assert.equal(countPostedToday(h, now), 1);
 });
+
+test('ordem inteligente: alterna gancho, corpo e CTA (G#C#A#)', async () => {
+  const { variantOf } = await import('../lib/scheduler.js');
+  assert.deepEqual(variantOf('LENÇOL/LENCOL_G1C2A1_1711_179.mp4'), { g: 1, c: 2, a: 1 });
+  assert.equal(variantOf('a/video-01.mp4'), null);
+  const videos = {};
+  for (const g of [1, 2, 3, 4]) for (const c of [1, 2, 3]) for (const a of [1, 2]) {
+    const p = `l/LENCOL_G${g}C${c}A${a}_1711.mp4`;
+    videos[p] = { path: p, folder: 'l', status: 'pending' };
+  }
+  const st = {
+    settings: { ...DEFAULT_SETTINGS, videoOrder: 'smart' }, runtime: {},
+    catalog: { L: { key: 'L', configured: true, productId: '123456' } },
+    folders: { l: { folder: 'l', catalogKey: 'L' } }, videos,
+  };
+  const q = previewQueue(st, 24).map((x) => variantOf(x.video.path));
+  assert.equal(q.length, 24);
+  for (let i = 1; i < q.length; i++) assert.notEqual(q[i].g, q[i - 1].g, `gancho repetido em seguida na posição ${i}`);
+  // os 4 primeiros usam os 4 ganchos diferentes
+  assert.equal(new Set(q.slice(0, 4).map((x) => x.g)).size, 4);
+  // continua espalhando considerando o que já foi postado
+  videos['l/LENCOL_G1C1A1_1711.mp4'].status = 'posted';
+  videos['l/LENCOL_G1C1A1_1711.mp4'].postedAt = 1;
+  assert.notEqual(variantOf(pickNext(st).video.path).g, 1);
+});

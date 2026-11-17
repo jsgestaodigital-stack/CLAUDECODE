@@ -18,6 +18,12 @@ async function load() {
   const s = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'products', 'videos', 'history', 'runtime']);
   const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
   settings.labels = mergeLabels(settings.labels);
+  // 1.7: a ordem antiga padrão ("pelo nome") vira a ordem inteligente uma única vez
+  if (!settings.orderV2) {
+    if (settings.videoOrder === 'name') settings.videoOrder = 'smart';
+    settings.orderV2 = true;
+    await chrome.storage.local.set({ settings });
+  }
   let state = {
     settings,
     catalog: s.catalog,

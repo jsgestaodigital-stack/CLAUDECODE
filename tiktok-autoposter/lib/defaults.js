@@ -55,7 +55,7 @@ export const DEFAULT_SETTINGS = {
   activeEndHour: 24,            // 1–24 (24 = até meia-noite)
   maxPerDay: 24,
   hashtagsCount: 5,
-  videoOrder: 'name',           // 'name' | 'random'
+  videoOrder: 'smart',          // 'smart' (alterna gancho/corpo/CTA pelo nome G#C#A#) | 'name' | 'random'
   onExhausted: 'pause',         // 'pause' (produto para) | 'loop' (recomeça os vídeos do produto)
   brandedContent: true,         // marcar "Conteúdo de marca" (marca de terceiros)
   linkProduct: true,            // vincular produto do TikTok Shop

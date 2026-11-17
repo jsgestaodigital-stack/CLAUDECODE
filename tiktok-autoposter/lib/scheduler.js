@@ -43,6 +43,33 @@ export function countPostedToday(history, now = Date.now()) {
   return history.filter((h) => h.status === 'posted' && h.ts >= start).length;
 }
 
+// Variação do vídeo pelo nome do arquivo: G = gancho, C = corpo, A = CTA (ex.: LENCOL_G1C2A1.mp4).
+export function variantOf(path) {
+  const name = String(path || '').split('/').pop();
+  const m = name.match(/G(\d+)[\s_-]*C(\d+)[\s_-]*A(\d+)/i);
+  return m ? { g: Number(m[1]), c: Number(m[2]), a: Number(m[3]) } : null;
+}
+
+// Ordem "espalhada": escolhe o vídeo mais diferente dos últimos postados do mesmo produto —
+// primeiro um gancho diferente, depois um corpo diferente, depois um CTA diferente.
+// Empates: o gancho que menos apareceu até agora; depois o nome do arquivo.
+export function pickSpread(candidates, recent, usage = {}) {
+  const weights = [1, 0.6, 0.35, 0.2];
+  const score = (v) => {
+    const x = variantOf(v.path);
+    if (!x) return 0;
+    let p = 0;
+    recent.slice(0, weights.length).forEach((r, i) => {
+      if (!r) return;
+      p += weights[i] * ((x.g === r.g ? 100 : 0) + (x.c === r.c ? 10 : 0) + (x.a === r.a ? 1 : 0));
+    });
+    return p;
+  };
+  const used = (v) => usage[variantOf(v.path)?.g] || 0;
+  return [...candidates].sort((a, b) => score(a) - score(b) || used(a) - used(b)
+    || a.path.localeCompare(b.path, 'pt-BR', { numeric: true }))[0];
+}
+
 function sortVideos(videos, order, rand) {
   const list = [...videos];
   if (order === 'random') {
@@ -160,7 +187,20 @@ export function pickNext(state, opts = {}) {
     return la - lb || a.localeCompare(b);
   });
   const product = candidates[0];
-  const video = sortVideos(byProduct.get(product), settings.videoOrder)[0];
+  const list = byProduct.get(product);
+  let video;
+  if ((settings.videoOrder || 'smart') === 'smart' && list.some((v) => variantOf(v.path))) {
+    // últimos postados deste produto (do mais recente ao mais antigo), mais os simulados na prévia
+    const posted = Object.values(videos)
+      .filter((v) => v.status === 'posted' && productKeyOf(state, v) === product && variantOf(v.path))
+      .sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0));
+    const recent = [...(opts.recentByProduct?.[product] || []), ...posted.map((v) => variantOf(v.path))];
+    const usage = {};
+    for (const r of recent) usage[r.g] = (usage[r.g] || 0) + 1;
+    video = pickSpread(list, recent, usage);
+  } else {
+    video = sortVideos(list, settings.videoOrder === 'smart' ? 'name' : settings.videoOrder)[0];
+  }
   return { product, video };
 }
 
@@ -170,14 +210,17 @@ export function previewQueue(state, n = 8) {
   const exclude = [];
   let lastProduct = state.runtime?.lastProduct;
   const lastPostedAt = {};
+  const recentByProduct = {};
   let t = Date.now();
   for (let i = 0; i < n; i++) {
-    const pick = pickNext(state, { excludePaths: exclude, lastProduct, lastPostedAt });
+    const pick = pickNext(state, { excludePaths: exclude, lastProduct, lastPostedAt, recentByProduct });
     if (!pick) break;
     out.push(pick);
     exclude.push(pick.video.path);
     lastProduct = pick.product;
     lastPostedAt[pick.product] = ++t;
+    const x = variantOf(pick.video.path);
+    if (x) recentByProduct[pick.product] = [x, ...(recentByProduct[pick.product] || [])];
   }
   return out;
 }
