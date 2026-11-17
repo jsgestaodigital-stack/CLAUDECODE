@@ -1,0 +1,6 @@
+{
+  "name": "tiktok-autoposter",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test test/*.test.mjs", "e2e": "xvfb-run -a node test/e2e.cjs" }
+}

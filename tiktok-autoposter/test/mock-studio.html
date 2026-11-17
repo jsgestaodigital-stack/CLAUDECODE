@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>TikTok Studio (simulação para testes)</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  [role=dialog] { position: fixed; inset: 60px; background: #fff; border: 2px solid #333; padding: 20px; }
+  [hidden] { display: none !important; }
+  .public-DraftEditor-content { border: 1px solid #999; min-height: 60px; padding: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<!-- Simulação simplificada da página de upload do TikTok Studio, só para testes automatizados. -->
+<div id="start">
+  <p>Selecione o vídeo para enviar</p>
+  <input type="file" accept="video/*" id="file">
+</div>
+<div id="draftModal" role="dialog" hidden>
+  <p>Continuar editando o rascunho?</p><button id="discard">Descartar</button>
+</div>
+<div id="editor" hidden>
+  <div id="status"><span id="pct">0%</span></div>
+  <p>Descrição</p>
+  <div class="DraftEditor-root"><div class="public-DraftEditor-content" contenteditable="true" id="cap"></div></div>
+  <div><span>Adicionar link</span> <button id="addLink">Adicionar link</button></div>
+  <div id="productCard"></div>
+  <button id="more">Mostrar mais</button>
+  <div id="advanced" hidden>
+    <div class="row"><span>Divulgar conteúdo do vídeo</span> <div role="switch" aria-checked="false" id="disc" tabindex="0"></div></div>
+    <div id="discOpts" hidden>
+      <label><input type="checkbox" id="own"> <span>Sua marca</span></label>
+      <label><input type="checkbox" id="branded"> <span>Conteúdo de marca</span></label>
+    </div>
+  </div>
+  <button data-e2e="post_video_button" id="post" disabled>Publicar</button>
+</div>
+<div id="m1" role="dialog" hidden>
+  <h3>Adicionar link</h3>
+  <div role="option" id="optProducts">Produtos</div>
+  <button id="m1next" disabled>Próximo</button>
+</div>
+<div id="m2" role="dialog" hidden>
+  <h3>Adicionar produtos</h3>
+  <input type="text" placeholder="Pesquisar produtos" id="search">
+  <div id="results"></div>
+  <button id="m2next" disabled>Próximo</button>
+</div>
+<div id="m3" role="dialog" hidden>
+  <h3>Nome do produto</h3>
+  <input type="text" maxlength="30" id="pname">
+  <button id="m3add">Adicionar</button>
+</div>
+<div id="confirm" role="dialog" hidden>
+  <p>Continuar a publicar?</p><button id="postNow">Publicar agora</button>
+</div>
+<div id="done" hidden>Gerenciar seus posts — Vídeo publicado</div>
+<script>
+  const $ = (id) => document.getElementById(id);
+  window.__result = { events: [] };
+  const R = window.__result;
+  const Q = new URLSearchParams(location.search);
+  if (new URLSearchParams(location.search).has('draft')) $('draftModal').hidden = false;
+  $('discard').onclick = () => { $('draftModal').hidden = true; R.events.push('draft-discarded'); };
+  $('file').addEventListener('change', (e) => {
+    const f = e.target.files[0];
+    R.fileName = f.name; R.fileSize = f.size; R.fileType = f.type;
+    f.arrayBuffer().then((b) => { R.firstByte = new Uint8Array(b)[0]; R.lastByte = new Uint8Array(b)[b.byteLength - 1]; });
+    $('start').hidden = true; $('editor').hidden = false;
+    $('cap').textContent = f.name.replace(/\.\w+$/, '');
+    let p = 0;
+    const t = setInterval(() => {
+      p += Q.has('slow') ? 1 : 20; $('pct').textContent = p + '%';
+      if (p >= 100) { clearInterval(t); $('status').textContent = 'Enviado'; $('post').disabled = false; }
+    }, 400);
+  });
+  $('cap').addEventListener('paste', (e) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    $('cap').textContent += text;
+    R.events.push('paste');
+  });
+  $('addLink').onclick = () => { $('m1').hidden = false; };
+  $('optProducts').onclick = () => { $('m1next').disabled = false; R.events.push('opt-products'); };
+  $('m1next').onclick = () => { $('m1').hidden = true; $('m2').hidden = false; };
+  $('search').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const q = $('search').value;
+    R.searched = q;
+    setTimeout(() => {
+      let rows;
+      if (q === 'ambiguo') rows = ['Kit ambiguo azul', 'Kit ambiguo rosa'];
+      else if (q === 'semresultado') rows = ['Produto aleatório A', 'Produto aleatório B'];
+      else rows = ['Outro produto qualquer', `${q} — Produto encontrado`, 'Mais um produto'];
+      if (Q.has('roleradio')) {
+        // variante: cada item tem um <input> escondido + um [role=radio] visível
+        $('results').innerHTML = rows.map((t, i) => `<div class="row" role="radio" aria-checked="false" data-i="${i}"><input type="radio" name="p" value="${i}" style="display:none"><span>${t}</span> <span>R$ 49,90</span></div>`).join('');
+        $('results').querySelectorAll('[role=radio]').forEach((d) => d.addEventListener('click', () => {
+          $('results').querySelectorAll('[role=radio]').forEach((o) => o.setAttribute('aria-checked', 'false'));
+          d.setAttribute('aria-checked', 'true'); d.querySelector('input').checked = true;
+          $('m2next').disabled = false; R.picked = d.dataset.i; R.pickedText = d.textContent.trim();
+        }));
+        return;
+      }
+      $('results').innerHTML = rows.map((t, i) => `<div class="row"><label><input type="radio" name="p" value="${i}"> <span>${t}</span></label><span>R$ 49,90</span></div>`).join('');
+      $('results').querySelectorAll('input').forEach((r) => r.addEventListener('change', () => { $('m2next').disabled = false; R.picked = r.value; R.pickedText = r.parentElement.textContent.trim(); }));
+    }, 800);
+  });
+  $('m2next').onclick = () => { $('m2').hidden = true; $('m3').hidden = false; $('pname').value = 'Nome padrão'; };
+  $('m3add').onclick = () => { R.productLabel = $('pname').value; $('m3').hidden = true; $('productCard').textContent = '🛒 ' + R.productLabel; };
+  $('more').onclick = () => { $('advanced').hidden = false; };
+  $('disc').onclick = () => {
+    const on = $('disc').getAttribute('aria-checked') !== 'true';
+    $('disc').setAttribute('aria-checked', String(on));
+    $('discOpts').hidden = !on;
+  };
+  $('post').onclick = () => { if (!$('post').disabled) $('confirm').hidden = false; };
+  $('postNow').onclick = () => {
+    if (Q.has('noconfirm')) { R.posted = true; R.caption = $('cap').innerText; $('confirm').hidden = true; return; }
+    R.caption = $('cap').innerText;
+    R.branded = $('branded').checked;
+    R.own = $('own').checked;
+    R.disclose = $('disc').getAttribute('aria-checked');
+    R.posted = true;
+    $('confirm').hidden = true;
+    history.pushState({}, '', '/tiktokstudio/content');
+    $('editor').hidden = true; $('done').hidden = false;
+  };
+</script>
+</body>
+</html>

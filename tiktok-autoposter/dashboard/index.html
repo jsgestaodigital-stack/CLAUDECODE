@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoPoster TikTok Shop</title>
+  <link rel="icon" href="../icons/icon48.png">
+  <link rel="stylesheet" href="style.css">
+  <script src="theme.js"></script>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></symbol>
+    <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+    <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.5"/><circle cx="17" cy="20" r="1.5"/><path d="M3 3h2.5l2.4 12h10.6L21 7H6.5"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17v.01"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7L20 8.5M20 3v5.5h-5.5"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.8 4.7 4.7 1.8-4.7 1.8L12 16l-1.8-4.7-4.7-1.8 4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+  </svg>
+
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="../icons/icon128.png" alt="">
+      <div><strong>AutoPoster</strong><span>TikTok Shop · afiliados</span></div>
+    </div>
+    <nav aria-label="Seções">
+      <button class="nav active" data-view="overview"><svg class="i"><use href="#i-home"/></svg>Visão geral</button>
+      <button class="nav" data-view="products"><svg class="i"><use href="#i-box"/></svg>Produtos<span class="badge" id="navProdBadge" hidden></span></button>
+      <button class="nav" data-view="queue"><svg class="i"><use href="#i-film"/></svg>Vídeos</button>
+      <button class="nav" data-view="history"><svg class="i"><use href="#i-clock"/></svg>Histórico<span class="badge" id="navHistBadge" hidden></span></button>
+      <button class="nav" data-view="settings"><svg class="i"><use href="#i-sliders"/></svg>Configurações</button>
+      <button class="nav" data-view="help"><svg class="i"><use href="#i-help"/></svg>Ajuda</button>
+    </nav>
+    <div class="side-card">
+      <div class="state"><span class="dot" id="sideDot"></span><span id="sideState">Pausado</span></div>
+      <div class="muted small" id="sideInfo"></div>
+      <button class="btn primary block" id="sideToggle"></button>
+      <div class="theme-toggle" role="group" aria-label="Tema">
+        <button data-theme-set="dark">Escuro</button>
+        <button data-theme-set="light">Claro</button>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Visão geral</h1>
+        <p id="viewSub"></p>
+      </div>
+      <div class="actions">
+        <button class="btn" id="btnDry" title="Preenche tudo no TikTok Studio, mas NÃO publica"><svg class="i"><use href="#i-flask"/></svg>Testar sem publicar</button>
+        <button class="btn" id="btnNow" title="Publica o próximo vídeo da fila agora"><svg class="i"><use href="#i-send"/></svg>Postar agora</button>
+        <button class="btn primary" id="btnToggle"></button>
+      </div>
+    </header>
+
+    <div id="banner" role="status" aria-live="polite"></div>
+
+    <!-- ============ VISÃO GERAL ============ -->
+    <section class="view" id="view-overview">
+      <div class="card setup" id="setupCard" hidden>
+        <div class="card-h">
+          <h2><svg class="i"><use href="#i-spark"/></svg>Configuração em 4 passos</h2>
+          <span class="muted small" id="setupCount"></span>
+        </div>
+        <div class="setup-steps" id="setupSteps"></div>
+      </div>
+
+      <div class="stats">
+        <div class="stat hero">
+          <span class="label">Próximo post</span>
+          <span class="value" id="stNext">—</span>
+          <span class="sub" id="stNextAt"></span>
+        </div>
+        <div class="stat"><span class="label">Postados hoje</span><span class="value" id="stToday">0</span><span class="sub" id="stTodayMax"></span></div>
+        <div class="stat"><span class="label">Na fila</span><span class="value" id="stPending">0</span><span class="sub" id="stProducts"></span></div>
+        <div class="stat"><span class="label">Falhas (24h)</span><span class="value" id="stFails">0</span><span class="sub" id="stTotal"></span></div>
+      </div>
+
+      <div class="card job-card" id="jobCard" hidden>
+        <div class="job">
+          <div class="spinner" aria-hidden="true"></div>
+          <div class="grow">
+            <strong id="jobTitle">Postando…</strong>
+            <div class="muted small" id="jobStep"></div>
+          </div>
+          <button class="btn small stop" id="btnCancel">Cancelar</button>
+        </div>
+        <div class="progress"><i id="jobBar" style="width:5%"></i></div>
+      </div>
+
+      <div class="grid2">
+        <div class="card">
+          <div class="card-h"><h2><svg class="i"><use href="#i-folder"/></svg>Pasta de vídeos</h2></div>
+          <div id="folderBox"></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h2><svg class="i"><use href="#i-calendar"/></svg>Próximos posts</h2><span class="muted small" id="intervalInfo"></span></div>
+          <ol class="upcoming" id="upcoming"></ol>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h"><h2><svg class="i"><use href="#i-clock"/></svg>Últimas atividades</h2><button class="link" data-goto="history">Ver histórico completo →</button></div>
+        <div id="recent"></div>
+      </div>
+    </section>
+
+    <!-- ============ PRODUTOS ============ -->
+    <section class="view" id="view-products" hidden>
+      <div class="toolbar">
+        <p class="hint grow" style="margin:0">Cada <b>subpasta</b> da sua pasta de vídeos vira um produto. Um produto só é postado depois que o <b>link do TikTok Shop</b> dele estiver configurado.</p>
+        <button class="btn small" data-act="rescan"><svg class="i"><use href="#i-refresh"/></svg>Ler pasta de novo</button>
+      </div>
+      <div class="products" id="productsGrid"></div>
+    </section>
+
+    <!-- ============ VÍDEOS ============ -->
+    <section class="view" id="view-queue" hidden>
+      <div class="toolbar">
+        <div class="seg" id="queueFilter" role="tablist" aria-label="Filtrar vídeos">
+          <button data-f="pending" class="on">Pendentes</button>
+          <button data-f="posted">Postados</button>
+          <button data-f="failed">Com falha</button>
+          <button data-f="unconfirmed">Verificar</button>
+          <button data-f="skipped">Pulados</button>
+          <button data-f="missing">Sumiram</button>
+          <button data-f="all">Todos</button>
+        </div>
+        <select id="queueProduct" aria-label="Filtrar por produto"></select>
+        <input type="search" id="queueSearch" placeholder="Buscar vídeo…" aria-label="Buscar vídeo">
+        <span class="grow"></span>
+        <button class="btn small" id="btnRequeueFailed" hidden>Voltar todos com falha para a fila</button>
+      </div>
+      <div class="card flush">
+        <table class="table" id="queueTable"></table>
+      </div>
+    </section>
+
+    <!-- ============ HISTÓRICO ============ -->
+    <section class="view" id="view-history" hidden>
+      <div class="toolbar">
+        <div class="seg" id="histFilter" role="tablist" aria-label="Filtrar histórico">
+          <button data-f="all" class="on">Tudo</button>
+          <button data-f="posted">Publicados</button>
+          <button data-f="failed">Falhas</button>
+          <button data-f="unconfirmed">Verificar</button>
+          <button data-f="dry-run">Testes</button>
+        </div>
+        <span class="grow"></span>
+        <button class="btn small danger" id="btnClearHist">Limpar histórico</button>
+      </div>
+      <div id="historyList"></div>
+    </section>
+
+    <!-- ============ CONFIGURAÇÕES ============ -->
+    <section class="view" id="view-settings" hidden>
+      <form id="settingsForm" class="settings" novalidate>
+        <div class="card">
+          <h2><svg class="i"><use href="#i-calendar"/></svg>Frequência</h2>
+          <div class="field">
+            <span>Postar a cada</span>
+            <div class="seg big" id="intervalSeg" role="radiogroup" aria-label="Intervalo entre posts">
+              <button type="button" data-v="5">5 min</button>
+              <button type="button" data-v="10">10 min</button>
+              <button type="button" data-v="15">15 min</button>
+              <button type="button" data-v="20">20 min</button>
+              <button type="button" data-v="30">30 min</button>
+              <button type="button" data-v="60">60 min</button>
+            </div>
+            <small id="intervalWarn" class="warn" hidden>⚠️ Intervalos curtos aumentam muito o risco de o TikTok limitar ou bloquear a conta.</small>
+          </div>
+          <div class="row3">
+            <label class="field"><span>Variação aleatória (± minutos)</span><input type="number" name="jitterMinutes" min="0" max="20"><small>Evita postar sempre no mesmo minuto.</small></label>
+            <label class="field"><span>Máximo de posts por dia</span><input type="number" name="maxPerDay" min="1" max="288"></label>
+            <label class="field"><span>Hashtags por post</span><input type="number" name="hashtagsCount" min="0" max="10"></label>
+          </div>
+          <div class="row3">
+            <label class="field"><span>Postar a partir de</span><select name="activeStartHour"></select></label>
+            <label class="field"><span>Postar até</span><select name="activeEndHour"></select></label>
+            <label class="field"><span>Ordem dos vídeos</span>
+              <select name="videoOrder"><option value="name">Pelo nome do arquivo</option><option value="random">Aleatória</option></select>
+            </label>
+          </div>
+          <label class="field"><span>Quando os vídeos de um produto acabarem</span>
+            <select name="onExhausted"><option value="pause">Parar de postar esse produto</option><option value="loop">Recomeçar do primeiro vídeo</option></select>
+          </label>
+        </div>
+
+        <div class="card">
+          <h2><svg class="i"><use href="#i-shield"/></svg>Publicação</h2>
+          <label class="switch"><input type="checkbox" name="linkProduct"><i></i><span><b>Vincular produto do TikTok Shop (carrinho laranja)</b><small>Produtos sem link configurado ficam fora da fila enquanto isto estiver ligado.</small></span></label>
+          <label class="switch"><input type="checkbox" name="brandedContent"><i></i><span><b>Marcar “Conteúdo de marca” (marca de terceiros)</b><small>Liga “Divulgar conteúdo do vídeo” → “Conteúdo de marca”.</small></span></label>
+          <label class="switch"><input type="checkbox" name="foregroundTab"><i></i><span><b>Abrir a aba do TikTok em primeiro plano</b><small>Ligue se as postagens travarem com a aba em segundo plano.</small></span></label>
+          <label class="switch"><input type="checkbox" name="closeTabAfter"><i></i><span><b>Fechar a aba após publicar</b><small>Abas com falha ficam abertas até a próxima tentativa, para você ver o que aconteceu.</small></span></label>
+          <div class="row3" style="margin-top:14px">
+            <label class="field"><span>Novas tentativas por vídeo</span><input type="number" name="maxRetries" min="0" max="3"></label>
+            <label class="field"><span>Pausar após falhas seguidas</span><input type="number" name="pauseAfterFailures" min="1" max="20"></label>
+            <span></span>
+          </div>
+        </div>
+
+        <details class="card">
+          <summary><h2><svg class="i"><use href="#i-sliders"/></svg>Avançado</h2><span class="muted small">endereço de upload e textos dos botões do TikTok</span></summary>
+          <label class="field"><span>Endereço da página de upload</span><input type="url" name="uploadUrl"></label>
+          <label class="field"><span>Textos usados para encontrar os botões (JSON)</span>
+            <textarea name="labels" rows="14" spellcheck="false" class="mono"></textarea>
+            <small>Se o TikTok mudar o nome de um botão, acrescente o novo texto na lista certa (minúsculo e sem acento) e salve.</small>
+          </label>
+          <button type="button" class="btn small" id="btnResetLabels">Restaurar textos padrão</button>
+        </details>
+
+        <div class="savebar">
+          <span class="muted small" id="saveMsg"></span>
+          <button class="btn" type="button" id="btnRevert">Descartar alterações</button>
+          <button class="btn primary" type="submit"><svg class="i"><use href="#i-check"/></svg>Salvar configurações</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ============ AJUDA ============ -->
+    <section class="view" id="view-help" hidden>
+      <div class="grid2">
+        <div class="card">
+          <h2>Como usar</h2>
+          <ol class="steps">
+            <li>Crie uma pasta (pode ser no <b>Google Drive para computador</b>) com <b>uma subpasta por produto</b> e coloque os vídeos prontos dentro.</li>
+            <li>Em <b>Visão geral</b>, clique em <b>Escolher pasta</b>. Se o Chrome oferecer, escolha <b>“Permitir em todas as visitas”</b>.</li>
+            <li>Em <b>Produtos → Configurar link</b>, informe o <b>ID do produto</b> do TikTok Shop (ou o nome exato) e o nicho para as hashtags.</li>
+            <li>Faça login no TikTok Studio neste Chrome e clique em <b>Testar sem publicar</b>.</li>
+            <li>Se o teste deu certo, clique em <b>Iniciar</b>. Deixe o Chrome aberto e o computador sem suspender.</li>
+          </ol>
+          <div class="links">
+            <a href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" rel="noopener"><svg class="i"><use href="#i-ext"/></svg>Abrir TikTok Studio · Upload</a>
+            <a href="https://www.tiktok.com/tiktokstudio/content" target="_blank" rel="noopener"><svg class="i"><use href="#i-ext"/></svg>Abrir TikTok Studio · Meus posts</a>
+            <a href="https://www.tiktok.com/login" target="_blank" rel="noopener"><svg class="i"><use href="#i-ext"/></svg>Entrar no TikTok</a>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Diagnóstico</h2>
+          <p class="muted" style="margin-top:8px">Com a página de upload do TikTok Studio aberta em outra aba, clique abaixo para ver os botões que a extensão está enxergando.</p>
+          <div style="margin-top:14px"><button class="btn" id="btnInspect"><svg class="i"><use href="#i-info"/></svg>Ler página do TikTok Studio</button></div>
+          <pre class="diag" id="inspectOut" hidden></pre>
+          <hr>
+          <h3>Legendas e hashtags</h3>
+          <p class="muted small" style="margin-top:6px">Cada legenda junta um gancho, um benefício do produto e uma chamada para o carrinho, sem repetir as últimas 20. As 5 hashtags são 3 do nicho e 2 amplas (TikTok Shop/achadinhos); de um post para o outro, 1 ou 2 mudam.</p>
+          <p class="muted small" style="margin-top:6px">Legenda fixa para um vídeo: crie um <code>.txt</code> com o mesmo nome do vídeo.</p>
+          <hr>
+          <button class="btn small danger" id="btnResetAll">Apagar todos os dados da extensão</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============ JANELA DO PRODUTO ============ -->
+  <dialog id="productDlg" aria-labelledby="pdTitle">
+    <form method="dialog" id="productForm" novalidate>
+      <header><div><h2 id="pdTitle">Produto</h2><div class="muted small" id="pdFolder"></div></div><button class="x" value="cancel" formnovalidate aria-label="Fechar">×</button></header>
+      <div class="dlg-body">
+        <div class="dlg-sec">
+          <h3><svg class="i"><use href="#i-cart"/></svg>Link do produto (carrinho laranja)</h3>
+          <div class="callout"><svg class="i"><use href="#i-info"/></svg><div>No TikTok Studio, em <b>Adicionar link → Produtos</b>, a extensão busca pelo texto abaixo e só vincula o resultado que <b>corresponder exatamente</b>. Se nada corresponder ou houver mais de um produto parecido, ela <b>não posta</b> e avisa. O <b>ID do produto</b> é o jeito mais seguro (fica no link do produto ou na sua vitrine de afiliado).</div></div>
+          <div class="row2">
+            <label class="field"><span>ID ou nome exato do produto <span class="req">*</span></span><input name="productQuery" placeholder="ex.: 1729384756123456789" autocomplete="off"><small id="pdQueryHint"></small></label>
+            <label class="field"><span>Nome no link do produto (até 30)</span><input name="productLabel" maxlength="30" autocomplete="off"><small><span id="pdLabelCount">0</span>/30 caracteres</small></label>
+          </div>
+        </div>
+
+        <div class="dlg-sec">
+          <h3><svg class="i"><use href="#i-text"/></svg>Legendas</h3>
+          <div class="row2">
+            <label class="field"><span>Nome do produto nas legendas</span><input name="displayName" required></label>
+            <label class="field"><span>Nicho (define as hashtags)</span><select name="niche" id="pdNiche"></select></label>
+          </div>
+          <label class="field"><span>Benefícios / pontos de venda <small class="muted">(um por linha — opcional)</small></span>
+            <textarea name="benefits" rows="4" placeholder="bateria que dura 30 horas&#10;cancelamento de ruído&#10;chega em 2 dias"></textarea>
+          </label>
+          <label class="field"><span>Hashtags próprias <small class="muted">(opcional; com 3 ou mais, substituem as do nicho)</small></span>
+            <textarea name="hashtags" rows="2" placeholder="#fonebluetooth #fonesemfio #musica"></textarea>
+          </label>
+          <details>
+            <summary class="link" style="display:inline-block;margin-bottom:10px">Usar modelos de legenda próprios (avançado)</summary>
+            <label class="field"><span>Modelos <small class="muted">(separe com uma linha “---”; use {opção 1|opção 2}, {produto}, {beneficio})</small></span>
+              <textarea name="captions" rows="5" placeholder="{Olha|Gente, olha} que achado: {produto} 😍 {beneficio}! Link no carrinho 🛒&#10;---&#10;{produto} — {beneficio}. Garanta no carrinho 🛒"></textarea>
+            </label>
+          </details>
+        </div>
+
+        <div class="dlg-sec preview">
+          <div class="card-h" style="margin-bottom:12px"><h3 style="margin:0"><svg class="i"><use href="#i-spark"/></svg>Prévia: 3 posts seguidos</h3><button type="button" class="link" id="pdRegen">gerar outros ↻</button></div>
+          <div id="pdPreview"></div>
+          <div class="muted small"><span style="color:var(--pink)">■</span> hashtags que mudaram em relação ao post anterior</div>
+        </div>
+      </div>
+      <footer>
+        <label class="switch inline"><input type="checkbox" name="enabled"><i></i><span>Produto ativo</span></label>
+        <span class="grow"></span>
+        <button class="btn" value="cancel" formnovalidate>Cancelar</button>
+        <button class="btn primary" value="save" id="pdSave"><svg class="i"><use href="#i-check"/></svg>Salvar produto</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
