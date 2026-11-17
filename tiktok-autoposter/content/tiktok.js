@@ -346,7 +346,15 @@
   // Faixa de rascunho antigo ("…não foi guardado. Continuar a editar?" Eliminar | Continuar):
   // elimina o rascunho para começar do zero.
   async function discardOldDraft() {
-    const hint = findByText(L.draftBanner || []).find((el) => !el.closest('button, [role="button"]'));
+    // procura o texto do aviso em qualquer parte da frase
+    const wanted = (L.draftBanner || []).map(norm).filter(Boolean);
+    let hint = null;
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let n;
+    while ((n = w.nextNode())) {
+      const t = norm(n.nodeValue);
+      if (t && wanted.some((x) => t.includes(x)) && visible(n.parentElement) && !n.parentElement.closest('button, [role="button"]')) { hint = n.parentElement; break; }
+    }
     if (!hint) return;
     let node = hint.parentElement;
     for (let i = 0; i < 5 && node && node !== document.body; i++) {
