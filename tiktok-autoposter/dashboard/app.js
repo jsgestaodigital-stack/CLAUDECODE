@@ -577,6 +577,7 @@ function openProduct(key, assign = null) {
   if (key && !p) return;
   editing = key || '';
   assignAfter = assign;
+  linkCheck++; // respostas atrasadas de um formulário anterior não mexem neste
   const f = $('#productForm');
   f.reset();
   $('#pdTitle').textContent = p ? p.displayName : 'Novo produto';
@@ -637,14 +638,14 @@ async function checkLink() {
   if (quick) {
     f.productId.value = quick;
     showLinkStatus();
-    if (wantTitle) resolveProductLink(url, fetch, { wantTitle: true }).then((r) => { if (my === linkCheck) fillTitle(r.title); });
+    if (wantTitle) resolveProductLink(url, fetch, { wantTitle: true }).then((r) => { if (my === linkCheck && $('#productDlg').open) fillTitle(r.title); });
     return quick;
   }
   f.productId.value = '';
   setLinkStatus('Abrindo o link para achar o ID do produto…', 'var(--muted)');
   const r = await resolveProductLink(url, fetch, { wantTitle });
   if (my !== linkCheck) return;
-  if (r.id) { f.productId.value = r.id; showLinkStatus(); fillTitle(r.title); return r.id; }
+  if (r.id) { f.productId.value = r.id; showLinkStatus(); if ($('#productDlg').open) fillTitle(r.title); return r.id; }
   setLinkStatus('✗ ' + r.error, 'var(--red)');
   return null;
 }
@@ -887,6 +888,7 @@ $('#productForm').addEventListener('input', (e) => {
 $('#productForm').addEventListener('change', (e) => { if (e.target.name === 'niche') renderPreview(); });
 $('#pdRegen').onclick = () => renderPreview();
 $('#productDlg').addEventListener('close', async () => {
+  linkCheck++;
   const key = editing;
   const assign = assignAfter;
   editing = null;
