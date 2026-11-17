@@ -37,7 +37,14 @@
   </div>
   <div id="productCard"></div>
   <h3>Definições</h3>
-  <button id="more">Mostrar mais</button>
+  <div class="settings-card">
+    <p>Quem pode ver esta publicação</p>
+    <button role="combobox" id="visibility">Todos ⌄</button>
+    <div class="menu" id="visMenu" hidden><div role="option">Todos</div><div role="option">Amigos</div><div role="option">Só tu</div></div>
+    <p>Carregamentos de alta qualidade</p>
+    <!-- no TikTok real, "Mostrar mais" é um texto clicável (div com cursor de mãozinha), não um <button> -->
+    <div class="more-row"><div id="more" style="cursor:pointer;display:inline-block"><span>Mostrar mais</span> <span>⌄</span></div></div>
+  </div>
   <div id="advanced" hidden>
     <p>Permitir aos utilizadores:</p>
     <label><input type="checkbox" checked> <span>Comentário</span></label>
@@ -204,7 +211,8 @@
   $('m3add').onclick = () => { R.productLabel = $('pname').value; R.linkedId = R.picked; $('m3').hidden = true; $('productCard').textContent = '🛒 ' + R.productLabel; };
 
   $('keepDraft').onclick = () => { R.events.push('draft-kept'); };
-  $('more').onclick = () => { $('advanced').hidden = false; $('more').textContent = 'Mostrar menos'; };
+  $('more').onclick = () => { $('advanced').hidden = false; $('more').firstElementChild.textContent = 'Mostrar menos'; R.events.push('show-more'); };
+  $('visibility').onclick = () => { $('visMenu').hidden = !$('visMenu').hidden; R.events.push('visibility-menu'); };
   $('disc').onclick = () => {
     const on = $('disc').getAttribute('aria-checked') !== 'true';
     $('disc').setAttribute('aria-checked', String(on));

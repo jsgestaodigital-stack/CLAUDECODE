@@ -805,7 +805,6 @@ async function command(name, p) {
       const key = prev ? p.key : newCatalogKey(data);
       const next = { niche: 'geral', enabled: true, createdAt: Date.now(), ...(prev || {}), ...data, key };
       if (!next.displayName) next.displayName = next.productQuery || (id ? `Produto ${id.slice(-6)}` : 'Produto');
-      if (!next.productLabel) next.productLabel = next.displayName.slice(0, 30);
       next.configured = !!(String(next.productId || '').trim() || String(next.productQuery || '').trim());
       if (!prev || linkKey(next) !== linkKey(prev)) next.linkTestedAt = null;
       state.catalog[key] = next;

@@ -21,7 +21,7 @@ export function mergeShowcase(catalog, items, now = Date.now()) {
       const key = 'id_' + it.id;
       const displayName = shortProductName(it.name);
       catalog[key] = {
-        key, displayName, productId: it.id, productUrl: '', productQuery: it.name.slice(0, 60), productLabel: displayName.slice(0, 30),
+        key, displayName, productId: it.id, productUrl: '', productQuery: it.name.slice(0, 60), productLabel: '', // vazio = nome sugerido pelo TikTok
         niche: guessNiche(it.name), benefits: '', hashtags: '', captions: '', enabled: true, configured: true,
         fromShowcase: true, showcase, unavailable, createdAt: now,
       };

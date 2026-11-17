@@ -167,20 +167,22 @@
     return hits.sort((a, b) => isBtn(a) - isBtn(b) || isExact(a) - isExact(b) || (a.innerText || '').length - (b.innerText || '').length || size(a) - size(b));
   }
 
-  // Elemento clicável para um texto: o próprio controle/botão, ou o único botão "vizinho" de um rótulo.
+  // Elemento a clicar para um texto: o próprio controle/botão; senão o próprio texto (ou o bloco
+  // dele que tem cursor de "mãozinha"). Nunca um botão vizinho — no TikTok, "Mostrar mais" é um
+  // texto clicável ao lado do seletor "Quem pode ver", e clicar no vizinho abria o seletor errado.
   function clickable(el) {
     if (!el) return el;
     if (el.matches(CONTROL) || el.matches('button, [role="button"], a')) return el;
     const own = el.closest(CLICKABLE);
     if (own && !isDialogRoot(own)) return own;
-    let node = el.parentElement;
-    for (let i = 0; i < 3 && node && !isDialogRoot(node); i++) {
-      const btns = [...node.querySelectorAll('button, [role="button"]')].filter(visible);
-      if (btns.length === 1) return btns[0];
-      if (btns.length > 1) break;
+    let node = el;
+    let best = null;
+    for (let i = 0; i < 4 && node && !isDialogRoot(node); i++) {
+      if (getComputedStyle(node).cursor === 'pointer') best = node;
+      else if (best) break;
       node = node.parentElement;
     }
-    return el;
+    return best || el;
   }
 
   // Clique "humano": rola até o elemento, leva o mouse até ele em vários passos, para em cima
@@ -725,7 +727,14 @@
       logAct(`tela do nome do produto: "${(d3.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}"`);
       await human(600, 1200);
       const nameInput = [...d3.querySelectorAll('input[maxlength], textarea[maxlength], input[type="text"], input:not([type])')].find((i) => visible(i) && i !== search);
-      if (nameInput && label) { await click(nameInput); await typeInto(nameInput, label.slice(0, 30)); }
+      const suggested = nameInput ? nameInput.value : '';
+      if (nameInput && label && label.trim() && label.trim() !== suggested.trim()) {
+        logAct(`nome no carrinho: "${label.slice(0, 30)}" (o TikTok sugeriu "${suggested}")`);
+        await click(nameInput);
+        await typeInto(nameInput, label.slice(0, 30));
+      } else {
+        logAct(`nome no carrinho: mantendo o sugerido pelo TikTok "${suggested}"`);
+      }
       const addFinal = await waitFor(() => findByText(L.add, { within: d3, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]') && !disabled(b)), { timeout: 10000, what: 'botão "Adicionar" do produto' });
       await click(addFinal);
       await human(1500, 2500);
@@ -809,8 +818,12 @@
   async function markBrandedContent() {
     let disclose = findByText(L.disclose)[0];
     if (!disclose) {
-      const more = findByText(L.showMore)[0];
-      if (more) { await click(more); await human(1000, 1600); }
+      const more = findByText(L.showMore, { exact: true })[0] || findByText(L.showMore)[0];
+      if (more) {
+        logAct(`abrindo "${(more.innerText || '').trim()}"`);
+        await click(more);
+        await human(1000, 1600);
+      }
       disclose = await waitFor(() => findByText(L.disclose)[0], { timeout: 10000, what: 'opção "Divulgar conteúdo do vídeo"' });
     }
     disclose.scrollIntoView({ block: 'center' });

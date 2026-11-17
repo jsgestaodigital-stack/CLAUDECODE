@@ -354,6 +354,7 @@ function renderProducts() {
         ${!ready ? `<div class="row">${icon('alert')}<span style="color:var(--yellow)">Cole o link do produto</span></div>` : !p.productId ? `<div class="row small" style="color:var(--yellow)">${icon('alert')}Sem link: só busca pelo nome</div>` : ''}
         ${ready ? `<div class="row">${icon('shield')}${tested ? `<span style="color:var(--green)">Link conferido ${fmtWhen(p.linkTestedAt)}</span>` : '<span class="muted">Ainda não testado — faça um teste</span>'}</div>` : ''}
         ${tested && p.linkTestedMatch ? `<div class="row muted small" title="${esc(p.linkTestedMatch)}">↳ ${esc(p.linkTestedMatch.slice(0, 60))}</div>` : ''}
+        <div class="row">🛒<span>No carrinho: <b>${esc(p.productLabel || (sc ? (sc.name || '').slice(0, 30) : '') || 'nome sugerido pelo TikTok')}</b> <button class="link" data-edit="${esc(p.key)}">trocar</button></span></div>
         <div class="row">${icon('hash')}${esc(niche)}${p.hashtags?.trim() ? ' + hashtags próprias' : ''}</div>
       </div>
       <div class="btns">
@@ -653,7 +654,6 @@ function fillTitle(title) {
   const f = $('#productForm');
   if (!f.displayName.value.trim()) f.displayName.value = title.slice(0, 60);
   if (!f.productQuery.value.trim()) f.productQuery.value = title;
-  if (!f.productLabel.value.trim()) f.productLabel.value = title.slice(0, 30);
   updateProductHints();
   renderPreview();
 }

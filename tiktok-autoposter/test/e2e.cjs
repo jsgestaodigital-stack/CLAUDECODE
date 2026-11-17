@@ -222,7 +222,8 @@ async function main() {
   assert(res.caption.includes(prodName), `legenda cita o produto (${prodName})`);
   assert((res.caption.match(/#[\p{L}\p{N}_]+/gu) || []).length === 5, '5 hashtags');
   assert(res.pickedText && res.pickedText.toLowerCase().includes(String(res.searched).toLowerCase()), `escolheu o resultado certo da busca: "${res.pickedText}" (não o 1º da lista)`);
-  assert(res.disclose === 'true' && res.branded === true && res.own === false, '"Conteúdo de marca" marcado (e "Sua marca" não)');
+  assert(res.disclose === 'true' && res.branded === true && res.own === false, '"Conteúdo de marca" marcado (e "A tua marca" não)');
+  assert(res.events.includes('show-more') && !res.events.includes('visibility-menu'), 'clicou no texto "Mostrar mais" (e não no seletor "Quem pode ver")');
   assert(res.posted, 'clicou em Publicar e confirmou');
   assert(h.linkedProduct && h.linkedProduct.toLowerCase().includes(String(res.searched).toLowerCase()), 'histórico registra qual produto foi vinculado');
   console.log('    Legenda:\n    ' + res.caption.replace(/\n/g, '\n    '));
@@ -439,6 +440,15 @@ async function main() {
   res = await tt.evaluate(() => window.__result);
   if (h.status !== 'dry-run') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
   assert(h.status === 'dry-run' && res.linkedId === '1739999999999999991' && res.pagesSeen >= 3, `achou a garrafa na página ${res.pagesSeen} da vitrine`);
+  assert(res.productLabel === 'Garrafa Térmica Inox 1L Parede Dupla'.slice(0, 30), 'sem nome definido: manteve o nome do carrinho sugerido pelo TikTok');
+  await cmd('catalog-save', { key: GARRAFA, data: { productLabel: 'Garrafa Inox 1L' } });
+  pp = nextTikTokPage();
+  const tG2 = Date.now();
+  await cmd('dry-run', { path: 'sem-link/s1.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.ts > tG2 && x.video === 'sem-link/s1.mp4', 180000);
+  res = await tt.evaluate(() => window.__result);
+  assert(h.status === 'dry-run' && res.productLabel === 'Garrafa Inox 1L', 'com nome definido: o carrinho usa o nome que você escolheu');
   await cmd('assign', { folder: 'sem-link', catalogKey: null });
 
   console.log('9) Configurações pela tela');
