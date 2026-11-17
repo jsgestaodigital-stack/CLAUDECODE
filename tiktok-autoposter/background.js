@@ -52,6 +52,32 @@ function log(...a) { console.log('[AutoPoster]', ...a); }
 
 function addHistory(state, entry) {
   state.history = [{ id: crypto.randomUUID(), ts: Date.now(), ...entry }, ...state.history].slice(0, HISTORY_LIMIT);
+  // capturas de tela ocupam espaço: guarda só as 15 mais recentes
+  let shots = 0;
+  state.history = state.history.map((h) => (h.shot && ++shots > 15 ? { ...h, shot: null } : h));
+}
+
+const fmtEntries = (entries) => (entries || []).map((e) => (typeof e === 'string' ? e : `${new Date(e.t).toLocaleTimeString('pt-BR')} [${e.s || '-'}] ${e.m}`));
+
+// Captura a tela da aba do TikTok (para o registro de erros e dos testes).
+async function screenshot(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!/^https:\/\/www\.tiktok\.com\//.test(tab.url || '')) return null;
+    let restore = null;
+    if (!tab.active) {
+      const [act] = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+      restore = act?.id || null;
+      await chrome.tabs.update(tabId, { active: true });
+      await sleep(800);
+    }
+    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 60 });
+    if (restore) chrome.tabs.update(restore, { active: true }).catch(() => {});
+    return url;
+  } catch (e) {
+    log('screenshot', e?.message || e);
+    return null;
+  }
 }
 
 // Aviso no Windows (notificação do Chrome) e, se configurado, no celular pelo Telegram.
@@ -331,6 +357,8 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     caption,
     captionMeta: { body: cap.body, hashtags: cap.hashtags, hook: cap.hook },
     brandedContent: !!state.settings.brandedContent,
+    speed: state.settings.speed || 'human',
+    log: [],
     dryRun: !!dryRun,
     attempt,
     startedAt: Date.now(),
@@ -420,6 +448,9 @@ async function finishJob(state, result) {
   const rt = state.runtime;
   const job = rt.currentJob;
   if (!job || (result.jobId && result.jobId !== job.id)) return lateResult(state, result);
+  // registro: o que a página mandou no final, ou o que foi chegando durante a postagem
+  result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
+  if (job.tabId && (!result.ok || job.dryRun)) result.shot = await screenshot(job.tabId);
   rt.currentJob = null;
   rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun }, ...(rt.recentJobs || [])].slice(0, 5);
   const s = state.settings;
@@ -432,7 +463,7 @@ async function finishJob(state, result) {
     addHistory(state, {
       status: result.ok ? 'dry-run' : 'failed', dryRun: true, product: job.product, productName: job.productName,
       video: job.path, caption: job.caption, error: result.error, step: result.step, diag: result.diag, durationMs, log: result.log,
-      linkedProduct: result.linkedProduct,
+      linkedProduct: result.linkedProduct, shot: result.shot, pageError: result.pageError,
     });
     rt.lastTestAt = now;
     rt.lastTestOk = !!result.ok;
@@ -449,7 +480,7 @@ async function finishJob(state, result) {
     if (job.tabId) rt.staleTabId = job.tabId;
     addHistory(state, {
       status: 'failed', product: job.product, productName: job.productName, video: job.path,
-      error: 'Você não está logado no TikTok neste Chrome. Entre na sua conta e clique em Iniciar.', step: result.step, diag: result.diag, durationMs, log: result.log,
+      error: 'Você não está logado no TikTok neste Chrome. Entre na sua conta e clique em Iniciar.', step: result.step, diag: result.diag, durationMs, log: result.log, shot: result.shot,
     });
     rt.retry = null;
     if (rt.running) {
@@ -490,7 +521,7 @@ async function finishJob(state, result) {
     addHistory(state, {
       status: 'unconfirmed', product: job.product, productName: job.productName, video: job.path, caption: job.caption,
       error: result.error + ' — confira em "Meus posts" no TikTok Studio se o vídeo saiu.', step: result.step, diag: result.diag, durationMs, attempt: job.attempt, log: result.log,
-      linkedProduct: result.linkedProduct,
+      linkedProduct: result.linkedProduct, shot: result.shot,
     });
     rt.retry = null;
     if (rt.running) rt.nextRunAt = computeNextRun(now, s);
@@ -503,6 +534,7 @@ async function finishJob(state, result) {
     addHistory(state, {
       status: 'failed', product: job.product, productName: job.productName, video: job.path, caption: job.caption,
       error: result.error, step: result.step, diag: result.diag, durationMs, attempt: job.attempt, willRetry, log: result.log,
+      linkedProduct: result.linkedProduct, shot: result.shot, pageError: result.pageError,
     });
     if (rt.running) {
       if (rt.consecutiveFailures >= (s.pauseAfterFailures || 3)) {
@@ -558,6 +590,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const job = state.runtime.currentJob;
       if (job && job.id === msg.jobId) {
         job.step = msg.step || job.step;
+        job.lastProgressAt = Date.now();
+        await save({ runtime: state.runtime });
+      }
+    });
+    return false;
+  }
+  if (msg.type === 'job-log') {
+    locked(async () => {
+      const state = await load();
+      const job = state.runtime.currentJob;
+      if (job && job.id === msg.jobId) {
+        job.log = [...(job.log || []), ...(msg.entries || [])].slice(-500);
         job.lastProgressAt = Date.now();
         await save({ runtime: state.runtime });
       }

@@ -214,6 +214,13 @@
           <h2><svg class="i"><use href="#i-shield"/></svg>Publicação</h2>
           <label class="switch"><input type="checkbox" name="linkProduct"><i></i><span><b>Vincular produto do TikTok Shop (carrinho laranja)</b><small>Produtos sem link configurado ficam fora da fila enquanto isto estiver ligado.</small></span></label>
           <label class="switch"><input type="checkbox" name="brandedContent"><i></i><span><b>Marcar “Conteúdo de marca” (marca de terceiros)</b><small>Liga “Divulgar conteúdo do vídeo” → “Conteúdo de marca”.</small></span></label>
+          <label class="field" style="margin-top:4px"><span>Velocidade das ações no TikTok</span>
+            <select name="speed">
+              <option value="human">Humana — devagar, digita a legenda aos poucos e move o mouse (recomendado)</option>
+              <option value="normal">Normal — mais rápida</option>
+            </select>
+            <small>No modo humano cada post leva alguns minutos a mais, mas parece uma pessoa usando o TikTok Studio.</small>
+          </label>
           <label class="switch"><input type="checkbox" name="keepAwake"><i></i><span><b>Impedir o computador de suspender enquanto estiver rodando</b><small>A tela pode apagar normalmente; só o modo de suspensão é bloqueado.</small></span></label>
           <label class="switch"><input type="checkbox" name="foregroundTab"><i></i><span><b>Abrir a aba do TikTok em primeiro plano</b><small>Ligue se as postagens travarem com a aba em segundo plano.</small></span></label>
           <label class="switch"><input type="checkbox" name="closeTabAfter"><i></i><span><b>Fechar a aba após publicar</b><small>Abas com falha ficam abertas até a próxima tentativa, para você ver o que aconteceu.</small></span></label>
@@ -363,6 +370,17 @@
         <button class="btn primary" value="save" id="pdSave"><svg class="i"><use href="#i-check"/></svg>Salvar produto</button>
       </footer>
     </form>
+  </dialog>
+
+  <!-- ============ REGISTRO DE UMA POSTAGEM ============ -->
+  <dialog id="logDlg" aria-labelledby="logTitle" style="width:min(980px,96vw)">
+    <header><div><h2 id="logTitle">Registro</h2><div class="muted small" id="logSub"></div></div><button class="x" id="logClose" aria-label="Fechar">×</button></header>
+    <div class="dlg-body" id="logBody"></div>
+    <footer>
+      <span class="muted small grow">Mande o relatório para o suporte para analisar o problema.</span>
+      <button class="btn" id="logCopy">Copiar relatório</button>
+      <button class="btn primary" id="logDownload">Baixar relatório</button>
+    </footer>
   </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>

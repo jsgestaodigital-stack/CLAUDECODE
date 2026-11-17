@@ -9,12 +9,64 @@
   const CONTROL = 'input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"], [role="switch"]';
   let L = {}; // textos (labels) usados para encontrar os elementos
   let currentStep = '';
-  let stepLog = [];
   let JOB = null;
   let linkedProduct = null;
   let clickedPublish = false;
   let aborted = false;
   let lastBeat = 0;
+  let SPEED = 2.2;            // multiplicador das esperas ("humano" = mais devagar)
+  let HUMAN = true;
+  let actLog = [];            // registro detalhado de cada ação
+  let pendingLog = [];
+  let flushTimer = null;
+  let baselineErrors = [];    // mensagens de erro que já estavam na página antes de começar
+  let pageError = null;       // mensagem de erro do TikTok detectada na tela
+  let lastMouse = { x: 40 + Math.random() * 200, y: 40 + Math.random() * 120 };
+
+  // ---------- registro (log) ----------
+  function describe(el) {
+    if (!el || !el.tagName) return String(el);
+    const tag = el.tagName.toLowerCase();
+    const role = el.getAttribute('role');
+    const e2e = el.getAttribute('data-e2e');
+    const aria = el.getAttribute('aria-label');
+    const txt = (el.innerText || el.value || el.placeholder || '').trim().replace(/\s+/g, ' ').slice(0, 50);
+    return `<${tag}${role ? ` role=${role}` : ''}${e2e ? ` data-e2e=${e2e}` : ''}${aria ? ` aria="${aria.slice(0, 40)}"` : ''}>${txt ? ` "${txt}"` : ''}`;
+  }
+  function logAct(m) {
+    const e = { t: Date.now(), s: currentStep, m: String(m).slice(0, 400) };
+    actLog.push(e);
+    if (actLog.length > 500) actLog.shift();
+    pendingLog.push(e);
+    if (!flushTimer) flushTimer = setTimeout(flushLog, 1500);
+  }
+  function flushLog() {
+    clearTimeout(flushTimer);
+    flushTimer = null;
+    if (!pendingLog.length || !JOB) return;
+    const entries = pendingLog;
+    pendingLog = [];
+    report('job-log', { jobId: JOB.id, entries });
+  }
+  const fmtLog = () => actLog.map((e) => `${new Date(e.t).toLocaleTimeString('pt-BR')} [${e.s || '-'}] ${e.m}`);
+
+  // ---------- detector da tela de erro do TikTok ----------
+  function errorPhrases() {
+    const body = norm(document.body?.innerText || '');
+    return (L.pageError || []).map(norm).filter((w) => w && body.includes(w));
+  }
+  function checkPageError() {
+    if (pageError || !JOB) return;
+    const now = errorPhrases().filter((w) => !baselineErrors.includes(w));
+    if (!now.length) return;
+    const body = (document.body?.innerText || '').replace(/\s+/g, ' ');
+    const i = norm(body).indexOf(now[0]);
+    const text = body.slice(Math.max(0, i - 120), i + 220).trim();
+    const last = actLog.filter((e) => !/^⏳|^✓ achei/.test(e.m)).slice(-1)[0];
+    pageError = { text, after: last ? last.m : '(início)' };
+    logAct(`🛑 O TikTok mostrou um erro na tela: "${text}"`);
+    flushLog();
+  }
 
   // ---------- utilidades ----------
   // Com a aba em segundo plano, o Chrome atrasa os timers da página (até 1x por minuto).
@@ -35,8 +87,12 @@
       await new Promise((r) => setTimeout(r, ms));
     }
     if (aborted) throw new Error('postagem cancelada');
+    checkPageError();
+    if (pageError) throw Object.assign(new Error(`o TikTok mostrou um erro na tela ("${pageError.text.slice(0, 160)}") logo depois de: ${pageError.after}`), { pageError: true });
   }
-  const human = (min = 350, max = 900) => sleep(min + Math.random() * (max - min));
+  // esperas "humanas": mais longas no modo humano
+  const human = (min = 350, max = 900) => sleep((min + Math.random() * (max - min)) * SPEED);
+  const rnd = (a, b) => a + Math.random() * (b - a);
   const norm = (s) => String(s || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/\s+/g, ' ').trim().toLowerCase();
@@ -58,14 +114,21 @@
     return /\bdisabled\b/i.test(el.className?.baseVal ?? el.className ?? '');
   }
 
-  async function waitFor(fn, { timeout = 30000, interval = 400, what = 'elemento' } = {}) {
-    const end = Date.now() + timeout;
+  async function waitFor(fn, { timeout = 30000, interval = 400, what = 'elemento', quiet = false } = {}) {
+    const start = Date.now();
+    const end = start + timeout;
     let last;
+    let logged = false;
     while (Date.now() < end) {
-      try { last = await fn(); } catch (_) { last = null; }
-      if (last) return last;
+      try { last = await fn(); } catch (e) { if (e?.pageError) throw e; last = null; }
+      if (last) {
+        if (logged && !quiet) logAct(`✓ achei ${what} (${((Date.now() - start) / 1000).toFixed(1)}s)`);
+        return last;
+      }
+      if (!logged && !quiet) { logAct(`⏳ esperando ${what}…`); logged = true; }
       await sleep(interval);
     }
+    if (!quiet) logAct(`✗ não apareceu: ${what} (esperei ${Math.round(timeout / 1000)}s)`);
     throw new Error(`Não encontrei: ${what} (esperei ${Math.round(timeout / 1000)}s)`);
   }
 
@@ -120,19 +183,45 @@
     return el;
   }
 
+  // Clique "humano": rola até o elemento, leva o mouse até ele em vários passos, para em cima
+  // um instante, pressiona, solta e só então clica.
   async function click(el) {
     el = clickable(el);
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    await human(200, 500);
+    const r0 = el.getBoundingClientRect();
+    if (r0.top < 60 || r0.bottom > innerHeight - 60) {
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior: HUMAN ? 'smooth' : 'auto' });
+      await human(350, 700);
+    }
     const r = el.getBoundingClientRect();
-    const opts = { bubbles: true, cancelable: true, view: window, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0 };
-    el.dispatchEvent(new PointerEvent('pointerover', opts));
+    const x = r.left + r.width * rnd(0.35, 0.65);
+    const y = r.top + r.height * rnd(0.35, 0.65);
+    logAct(`🖱 clicando em ${describe(el)}`);
+    if (HUMAN) {
+      const steps = Math.round(rnd(6, 14));
+      for (let i = 1; i <= steps; i++) {
+        const k = i / steps;
+        const ease = k * k * (3 - 2 * k);
+        const mx = lastMouse.x + (x - lastMouse.x) * ease + rnd(-2, 2);
+        const my = lastMouse.y + (y - lastMouse.y) * ease + rnd(-2, 2);
+        const target = document.elementFromPoint(mx, my) || document.body;
+        target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: mx, clientY: my }));
+        await sleep(rnd(12, 35));
+      }
+    }
+    lastMouse = { x, y };
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
+    el.dispatchEvent(new PointerEvent('pointerover', { ...opts, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mouseover', opts));
+    el.dispatchEvent(new PointerEvent('pointerenter', { ...opts, bubbles: false, pointerType: 'mouse' }));
+    el.dispatchEvent(new MouseEvent('mouseenter', { ...opts, bubbles: false }));
+    await human(120, 380);
     el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerType: 'mouse', isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mousedown', opts));
+    await sleep(rnd(60, 160));
     el.dispatchEvent(new PointerEvent('pointerup', { ...opts, pointerType: 'mouse', isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.click();
-    await human();
+    await human(400, 900);
   }
 
   function setInputValue(input, value) {
@@ -142,6 +231,20 @@
     setter.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  // Digita num campo comum (busca, nome do produto) letra por letra no modo humano.
+  async function typeInto(input, value) {
+    logAct(`⌨ digitando "${String(value).slice(0, 60)}" em ${describe(input)}`);
+    if (!HUMAN) { setInputValue(input, value); return; }
+    input.focus();
+    setInputValue(input, '');
+    let cur = '';
+    for (const ch of String(value)) {
+      cur += ch;
+      setInputValue(input, cur);
+      await sleep(rnd(45, 140));
+    }
+    await human(200, 500);
   }
 
   function key(el, k, code = k, keyCode = 0) {
@@ -168,10 +271,15 @@
 
   async function step(name, fn) {
     currentStep = name;
-    stepLog.push(`${new Date().toLocaleTimeString('pt-BR')} • ${name}`);
+    logAct(`▶ ${name}`);
     lastBeat = Date.now();
     report('job-progress', { jobId: JOB?.id, step: name });
-    return fn();
+    flushLog();
+    if (HUMAN) await human(700, 1600); // pausa entre etapas, como quem confere a tela
+    const t0 = Date.now();
+    const out = await fn();
+    logAct(`■ fim de "${name}" (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    return out;
   }
 
   // ---------- diagnóstico ----------
@@ -187,6 +295,10 @@
       fileInputs: document.querySelectorAll('input[type="file"]').length,
       editors: [...document.querySelectorAll('[contenteditable="true"]')].filter(visible).length,
       dialogs: dialogs().map((d) => (d.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 400)).slice(0, 4),
+      pageError: pageError || null,
+      pageText: (document.body?.innerText || '').replace(/\n{3,}/g, '\n\n').slice(0, 5000),
+      viewport: `${innerWidth}x${innerHeight}`,
+      userAgent: navigator.userAgent,
     };
   }
 
@@ -225,6 +337,7 @@
       const draft = findByText(L.discardDraft, { within: d, exact: true })[0];
       const btn = draft || findByText(L.dismiss, { within: d, exact: true })[0];
       if (!btn) return;
+      logAct(`fechando aviso do TikTok: "${(d.innerText || '').replace(/\s+/g, ' ').slice(0, 120)}"`);
       await click(btn);
       await sleep(600);
     }
@@ -232,6 +345,7 @@
 
   async function uploadVideo(file) {
     const input = await waitFor(findFileInput, { timeout: 60000, what: 'campo de envio de vídeo' });
+    logAct(`📤 enviando ${file.name} (${(file.size / 1e6).toFixed(1)} MB, ${file.type}) para ${describe(input)}`);
     const dt = new DataTransfer();
     dt.items.add(file);
     input.files = dt.files;
@@ -250,39 +364,67 @@
 
   const editorText = (ed) => norm(ed.innerText);
 
+  // Seleciona todo o texto do editor sem alterar a página (só a seleção).
+  function selectAllIn(ed) {
+    ed.focus();
+    const sel = getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(ed);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  }
+  function caretToEnd(ed) {
+    ed.focus();
+    const sel = getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(ed);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  }
+  // "Cola" um texto no editor: o editor do TikTok (Draft.js) trata a colagem por conta própria,
+  // sem a extensão mexer no conteúdo da página por fora (isso é o que pode travar a página).
+  function pasteText(ed, text) {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }
+
   async function writeCaption(caption) {
     const ed = await waitFor(findCaptionEditor, { timeout: 180000, what: 'campo de legenda' });
+    logAct(`campo de legenda: ${describe(ed)} · texto atual: "${(ed.innerText || '').trim().slice(0, 80)}"`);
     await human(800, 1500);
-    ed.focus();
-    // limpa o texto atual (o TikTok preenche com o nome do arquivo)
-    document.execCommand('selectAll', false, null);
-    document.execCommand('delete', false, null);
-    await sleep(300);
-
-    // 1ª tentativa: colar (o editor do TikTok aceita colar com quebras de linha)
-    const dt = new DataTransfer();
-    dt.setData('text/plain', caption);
-    ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-    await sleep(800);
-
-    const probe = norm(caption.split('\n')[0]).slice(0, 25);
-    if (!editorText(ed).includes(probe)) {
-      // 2ª tentativa: digitar linha a linha
-      ed.focus();
-      document.execCommand('selectAll', false, null);
-      document.execCommand('delete', false, null);
-      const lines = caption.split('\n');
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i]) document.execCommand('insertText', false, lines[i]);
-        if (i < lines.length - 1) key(ed, 'Enter', 'Enter', 13);
-        await sleep(120);
+    await click(ed);
+    // seleciona o texto atual (o TikTok preenche com o nome do arquivo); a 1ª colagem substitui tudo
+    selectAllIn(ed);
+    await human(300, 700);
+    if (!HUMAN) {
+      logAct(`⌨ colando a legenda (${caption.length} caracteres)`);
+      pasteText(ed, caption);
+      await sleep(800);
+    } else {
+      // escreve em pedaços de 1 a 3 palavras, com pausas de quem está digitando
+      logAct(`⌨ escrevendo a legenda em ritmo humano (${caption.length} caracteres)`);
+      const parts = caption.match(/\n+|[^\s]+[ \t]*/g) || [caption];
+      let i = 0;
+      let first = true;
+      while (i < parts.length) {
+        const n = parts[i].startsWith('\n') ? 1 : Math.min(parts.length - i, Math.round(rnd(1, 3)));
+        const chunk = parts.slice(i, i + n).join('');
+        if (!first) caretToEnd(ed);
+        pasteText(ed, chunk);
+        first = false;
+        i += n;
+        await sleep(rnd(140, 420) * (chunk.includes('\n') ? 2.5 : 1));
+        if (Math.random() < 0.08) await human(500, 1400); // pausa para "pensar"
       }
-      await sleep(600);
+      await sleep(900);
     }
-    // fecha a lista de sugestões de hashtag, se abriu
-    key(ed, 'Escape', 'Escape', 27);
-    await sleep(300);
-    if (!editorText(ed).includes(probe)) throw new Error('a legenda não ficou no campo');
+    const probe = norm(caption.split('\n')[0]).slice(0, 25);
+    logAct(`legenda no campo: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 140)}"`);
+    if (!editorText(ed).includes(probe)) throw new Error('a legenda não ficou no campo (o editor não aceitou o texto)');
   }
 
   function findPostButton() {
@@ -374,10 +516,10 @@
   // Digita a busca e espera a lista mudar e ficar estável.
   async function searchProducts(search, query) {
     const before = signature(readResults(topDialog()));
-    setInputValue(search, '');
-    await sleep(200);
-    setInputValue(search, query);
-    await sleep(300);
+    await click(search);
+    await typeInto(search, query);
+    await human(250, 600);
+    logAct('⏎ Enter na busca');
     key(search, 'Enter', 'Enter', 13);
     let rows = null;
     let stable = 0;
@@ -425,16 +567,16 @@
       const { rows, listChanged } = await searchProducts(search, a.q);
       try {
         chosen = matchProduct(rows, a, job.productId, listChanged);
-        stepLog.push(`✓ produto encontrado ${{ link: 'colando o link', id: 'pela busca do ID', name: 'pela busca do nome' }[a.kind]}`);
+        logAct(`✓ produto encontrado ${{ link: 'colando o link', id: 'pela busca do ID', name: 'pela busca do nome' }[a.kind]}`);
         break;
       } catch (e) {
         errors.push(e.message);
-        stepLog.push('• ' + e.message);
+        logAct('• ' + e.message);
       }
     }
     if (!chosen) throw new Error(`não vinculei nenhum produto para não errar o link — ${errors.join(' | ')}. Confira se o produto está na sua vitrine de afiliado.`);
     linkedProduct = chosen.text.slice(0, 160);
-    stepLog.push(`✓ produto escolhido: ${linkedProduct}`);
+    logAct(`✓ produto escolhido: ${linkedProduct}`);
     await click(chosen.el.matches('input') ? (chosen.el.closest('label') || chosen.el) : chosen.el);
     await human(800, 1400);
     if (!isOn(chosen.el)) { await click(chosen.el); await human(); }
@@ -456,7 +598,7 @@
     if (d3 !== 'closed') {
       await human(600, 1200);
       const nameInput = [...d3.querySelectorAll('input[maxlength], textarea[maxlength], input[type="text"], input:not([type])')].find((i) => visible(i) && i !== search);
-      if (nameInput && label) { setInputValue(nameInput, label.slice(0, 30)); await human(); }
+      if (nameInput && label) { await click(nameInput); await typeInto(nameInput, label.slice(0, 30)); }
       const addFinal = await waitFor(() => findByText(L.add, { within: d3, exact: true }).map(clickable).find((b) => !disabled(b)), { timeout: 10000, what: 'botão Adicionar do produto' });
       await click(addFinal);
       await human(1500, 2500);
@@ -475,7 +617,7 @@
       return false;
     };
     const attached = await waitFor(() => marks.some(appears), { timeout: 8000, what: 'produto anexado' }).catch(() => false);
-    stepLog.push(attached ? '✓ produto anexado aparece na página' : '⚠ não consegui ver o nome do produto anexado na página (confira o 1º post)');
+    logAct(attached ? '✓ produto anexado aparece na página' : '⚠ não consegui ver o nome do produto anexado na página (confira o 1º post)');
   }
 
   // ---------- conteúdo de marca ----------
@@ -540,7 +682,7 @@
       if (ok) { await click(ok); await human(); }
     }
     if (!isOn(box)) throw new Error('"Conteúdo de marca" não ficou marcado');
-    stepLog.push('✓ "Conteúdo de marca" marcado');
+    logAct('✓ "Conteúdo de marca" marcado');
   }
 
   // ---------- publicar ----------
@@ -583,11 +725,18 @@
   async function runJob(job) {
     JOB = job;
     L = job.labels || {};
-    stepLog = [];
+    actLog = [];
+    pendingLog = [];
     linkedProduct = null;
     clickedPublish = false;
     aborted = false;
+    pageError = null;
+    HUMAN = job.speed !== 'normal';
+    SPEED = HUMAN ? 2.2 : 1;
+    logAct(`início: ${job.dryRun ? 'TESTE (não publica)' : 'POSTAGEM'} · vídeo ${job.path} · produto "${job.productName}" · modo ${HUMAN ? 'humano' : 'normal'} · ${location.href}`);
     try {
+      baselineErrors = errorPhrases();
+      if (baselineErrors.length) logAct(`(textos de erro já presentes antes de começar, ignorados: ${baselineErrors.join(', ')})`);
       await step('Aguardando a página de upload', () => waitFor(findFileInput, { timeout: 60000, what: 'página de upload carregada (você está logado no TikTok?)' }));
       await dismissPopups();
       const file = await step('Lendo o vídeo da pasta', () => fetchVideo(job.path));
@@ -599,14 +748,17 @@
       if (job.brandedContent) await step('Marcando "Conteúdo de marca"', () => markBrandedContent());
       await dismissPopups();
       if (job.dryRun) {
-        report('job-result', { jobId: job.id, ok: true, step: 'Teste concluído (não publicado)', log: stepLog, linkedProduct });
+        logAct('✅ teste concluído — nada foi publicado');
+        report('job-result', { jobId: job.id, ok: true, step: 'Teste concluído (não publicado)', log: fmtLog(), linkedProduct });
         return;
       }
       await step('Publicando', () => publish());
-      report('job-result', { jobId: job.id, ok: true, step: 'Publicado', url: location.href, log: stepLog, linkedProduct });
+      logAct('✅ publicado');
+      report('job-result', { jobId: job.id, ok: true, step: 'Publicado', url: location.href, log: fmtLog(), linkedProduct });
     } catch (e) {
       if (aborted) return;
-      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: stepLog, linkedProduct, clickedPublish, loggedOut: !clickedPublish && isLoggedOut() });
+      logAct(`❌ ${e.message || e}`);
+      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), linkedProduct, clickedPublish, loggedOut: !clickedPublish && !pageError && isLoggedOut(), pageError: !!pageError });
     }
   }
 

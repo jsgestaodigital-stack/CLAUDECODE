@@ -20,6 +20,12 @@ export const DEFAULT_LABELS = {
   discardDraft: ['descartar', 'discard', 'nao, obrigado', 'no, thanks'],
   uploading: ['enviando', 'carregando', 'uploading', 'processando', 'processing'],
   uploaded: ['enviado', 'carregado', 'uploaded', 'upload concluido', 'upload complete'],
+  // mensagens da tela de erro do TikTok (a extensão para e registra quando uma delas aparece)
+  pageError: [
+    'algo deu errado', 'ocorreu um erro', 'ops, algo', 'something went wrong', 'an error occurred', 'oops, something',
+    'erro de rede', 'network error', 'falha no upload', 'falha ao enviar', 'upload failed', 'nao foi possivel enviar',
+    "couldn't upload", 'tente novamente mais tarde', 'please try again later', 'atualize a pagina', 'refresh the page',
+  ],
   success: [
     'video publicado', 'seu video foi publicado', 'publicacao concluida', 'your video has been uploaded',
     'video published', 'your video is being uploaded', 'gerenciar seus posts', 'manage your posts',
@@ -40,6 +46,7 @@ export const DEFAULT_SETTINGS = {
   linkProduct: true,            // vincular produto do TikTok Shop
   foregroundTab: false,         // abrir a aba do TikTok em primeiro plano
   closeTabAfter: true,          // fechar a aba depois de postar
+  speed: 'human',               // 'human' (devagar, como uma pessoa) | 'normal'
   maxRetries: 1,                // novas tentativas do mesmo vídeo em caso de falha
   pauseAfterFailures: 3,        // pausa tudo após N falhas seguidas
   keepAwake: true,              // impedir o computador de suspender enquanto estiver rodando

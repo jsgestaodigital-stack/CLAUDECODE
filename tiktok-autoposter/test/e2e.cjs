@@ -201,7 +201,7 @@ async function main() {
   await dash.screenshot({ path: path.join(SHOTS, '02-produtos.png') });
 
   console.log('3) Botão "Postar agora" do topo (produto + conteúdo de marca)');
-  await cmd('save-settings', { settings: { closeTabAfter: false, uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
+  await cmd('save-settings', { settings: { closeTabAfter: false, speed: 'normal', uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
   await dash.click('[data-view="overview"]');
   let pp = nextTikTokPage();
   await dash.click('#btnNow');
@@ -215,6 +215,8 @@ async function main() {
   assert(h.status === 'posted', `publicado: ${h.video}`);
   let res = await tt.evaluate(() => window.__result);
   assert(res.events.includes('draft-discarded'), 'descartou o aviso de rascunho');
+  assert(res.events.includes('paste-replace') && !res.events.some((e) => e.startsWith('beforeinput:delete')), 'legenda substituiu o nome do arquivo sem apagar o editor "por fora"');
+  assert(!/\.mp4|v01/.test(res.caption), 'o nome do arquivo não ficou na legenda');
   assert(res.fileType === 'video/mp4', 'tipo video/mp4');
   const prodName = { fone: 'Fone Bluetooth X', escova: 'Escova secadora', kit: 'Kit ambiguo' }[h.video.split('-')[0]];
   assert(res.caption.includes(prodName), `legenda cita o produto (${prodName})`);
@@ -347,6 +349,43 @@ async function main() {
   await sleep(600);
   st = await get(['catalog', 'folders']);
   assert(!st.catalog[TMP] && !st.folders['sem-link'].catalogKey, 'produto removido e a pasta ficou sem produto');
+
+  console.log('8f) Modo humano: legenda escrita aos poucos, registro completo e captura de tela');
+  await cmd('save-settings', { settings: { speed: 'human' } });
+  pp = nextTikTokPage();
+  const tH = Date.now();
+  await cmd('dry-run', { path: 'fone-bluetooth-x/v01.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.ts > tH && x.dryRun, 300000);
+  res = await tt.evaluate(() => window.__result);
+  if (h.status !== 'dry-run') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
+  assert(h.status === 'dry-run', `teste em modo humano concluído (${Math.round(h.durationMs / 1000)}s)`);
+  assert(res.pastes >= 5, `legenda escrita em ${res.pastes} pedaços`);
+  assert(h.log.some((l) => /🖱 clicando em/.test(l)) && h.log.some((l) => /▶ Vinculando/.test(l)) && h.log.length > 20, `registro detalhado (${h.log.length} linhas)`);
+  assert(h.shot && h.shot.startsWith('data:image/jpeg'), 'captura de tela salva no teste');
+  await cmd('save-settings', { settings: { speed: 'normal' } });
+
+  console.log('8g) Tela de erro do TikTok ("robozinho") → para, registra e mostra o que aconteceu');
+  await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?crash=1' } });
+  pp = nextTikTokPage();
+  const tC = Date.now();
+  await cmd('dry-run', { path: 'fone-bluetooth-x/v01.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.ts > tC && x.dryRun, 180000);
+  if (h.status !== 'failed') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
+  assert(h.status === 'failed' && /erro na tela/.test(h.error) && /Algo deu errado/.test(h.error), 'detectou a tela de erro: ' + h.error.slice(0, 120));
+  assert(/depois de/.test(h.error), 'diz qual foi a última ação antes do erro');
+  assert(h.log.some((l) => l.includes('🛑')) && h.shot && h.diag && /Algo deu errado/.test(h.diag.pageText), 'registro com a linha do erro, captura e texto da página');
+  await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
+  await dash.click('[data-view="history"]');
+  await dash.click(`[data-log="${h.id}"]`);
+  await dash.waitForSelector('#logDlg[open]');
+  assert(await dash.isVisible('#logShot') && (await dash.$$('#logBody .timeline li')).length > 5, 'tela "Ver registro" mostra captura e passo a passo');
+  await dash.screenshot({ path: path.join(SHOTS, '12-registro.png') });
+  const [logFile] = await Promise.all([dash.waitForEvent('download'), dash.click('#logDownload')]);
+  const report = JSON.parse(fs.readFileSync(await logFile.path(), 'utf8'));
+  assert(report.error === h.error && report.log.length === h.log.length && report.screenshot, 'relatório baixado com erro, passos e imagem');
+  await dash.click('#logClose');
 
   console.log('9) Configurações pela tela');
   await dash.click('[data-view="settings"]');

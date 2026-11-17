@@ -109,6 +109,25 @@ O painel abre no tema escuro e mostra a **configuração passo a passo**:
 - **Pasta no Google Drive:** marque a pasta como *Disponível off-line* para os vídeos estarem no disco.
 - **Backup:** em Ajuda → *Exportar backup* você guarda produtos, links e configurações num arquivo. *Importar backup* restaura tudo.
 
+## Registro de erros (para suporte)
+
+- Cada postagem e cada teste guarda um **registro completo**:
+  - todas as etapas e cada clique, com o botão exato e o horário;
+  - o que foi digitado e quanto tempo cada espera levou;
+  - quando há erro, uma **captura da tela do TikTok** e o **texto da página** naquele momento.
+- Se a **tela de erro do TikTok** aparecer (o "robozinho"), a extensão **para na hora**, registra a mensagem e diz **qual foi a última ação antes do erro**.
+- Para ver: **Histórico → Ver registro**. Use **Baixar relatório** e mande o arquivo `.json` para o suporte; ele inclui a imagem. **Copiar relatório** copia só o texto.
+
+## Velocidade (modo humano)
+
+Em **Configurações → Publicação → Velocidade**, o padrão é **Humana**:
+- o mouse vai até o botão e para em cima antes de clicar;
+- a legenda é escrita aos poucos, de 1 a 3 palavras por vez;
+- a busca do produto é digitada letra por letra;
+- há pausas entre as etapas.
+
+Cada post leva alguns minutos a mais. Se quiser, troque para **Normal**, que é mais rápido.
+
 ## Se o TikTok mudar a tela
 
 O TikTok muda o layout de vez em quando. A extensão encontra os botões **pelo texto** (por exemplo “Adicionar link”, “Próximo”, “Conteúdo de marca”, “Publicar”). Se algo parar de funcionar:

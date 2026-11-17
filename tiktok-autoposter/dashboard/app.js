@@ -302,7 +302,7 @@ function tickCountdown() {
 function historyHtml(list) {
   return list.map((h) => {
     const file = h.video ? h.video.split('/').pop() : '';
-    const tech = h.diag || h.log ? `<details><summary>Detalhes técnicos</summary><pre class="diag">${esc(JSON.stringify({ etapas: h.log, ...(h.diag || {}) }, null, 2))}</pre></details>` : '';
+    const tech = h.diag || (h.log && h.log.length) || h.shot ? `<div style="margin-top:8px"><button class="btn small" data-log="${esc(h.id)}">${icon('info')}Ver registro${h.shot ? ' e captura de tela' : ''}</button></div>` : '';
     return `<div class="act">
       <div class="when">${fmtWhen(h.ts)}</div>
       <div>
@@ -440,6 +440,62 @@ function renderHistory() {
   $('#historyList').innerHTML = list.length ? `<div class="card">${historyHtml(list.slice(0, 300))}</div>` : '<div class="empty">Nada por aqui ainda.</div>';
 }
 
+// ---------- registro detalhado de uma postagem ----------
+let logEntry = null;
+function openLog(id) {
+  const h = S.history.find((x) => x.id === id);
+  if (!h) return;
+  logEntry = h;
+  $('#logTitle').textContent = `${STATUS[h.status]?.[0] || h.status} · ${h.productName || ''}`;
+  $('#logSub').textContent = `${fmtWhen(h.ts)} · ${h.video || ''}${h.durationMs ? ` · ${Math.round(h.durationMs / 1000)}s` : ''}`;
+  const d = h.diag || {};
+  const lines = (h.log || []).map((l) => {
+    const cls = /❌|🛑|✗/.test(l) ? 'bad' : /✅|✓/.test(l) ? 'ok' : /▶/.test(l) ? 'stepl' : '';
+    return `<li class="${cls}">${esc(l)}</li>`;
+  }).join('');
+  $('#logBody').innerHTML = `
+    ${h.error ? `<div class="log-error"><b>${esc(h.step || '')}</b><br>${esc(h.error)}</div>` : ''}
+    <div class="log-summary">
+      <div><b>Etapa</b>${esc(h.step || '—')}</div>
+      <div><b>Produto vinculado</b>${esc(h.linkedProduct || '—')}</div>
+      <div><b>Página</b>${esc(d.url || '—')}</div>
+      <div><b>Tentativa</b>${h.attempt || 1}</div>
+    </div>
+    ${h.shot ? `<img class="log-shot" src="${h.shot}" alt="Captura da tela do TikTok no momento" title="Clique para abrir em tamanho real" id="logShot">` : '<p class="muted small">Sem captura de tela para este registro.</p>'}
+    <h3>Passo a passo</h3>
+    ${lines ? `<ol class="timeline">${lines}</ol>` : '<p class="muted small">Sem registro de passos.</p>'}
+    ${d.pageText ? `<details><summary class="link">Texto que estava na página</summary><pre class="diag">${esc(d.pageText)}</pre></details>` : ''}
+    ${h.diag ? `<details><summary class="link">Dados técnicos</summary><pre class="diag">${esc(JSON.stringify({ ...d, pageText: undefined }, null, 2))}</pre></details>` : ''}
+    ${h.caption ? `<details><summary class="link">Legenda usada</summary><pre class="diag">${esc(h.caption)}</pre></details>` : ''}`;
+  $('#logDlg').showModal();
+  const img = $('#logShot');
+  if (img) img.onclick = () => { const w = window.open(); if (w) w.document.write(`<img src="${h.shot}" style="max-width:100%">`); };
+}
+function logReport(h) {
+  return {
+    app: 'AutoPoster TikTok Shop', version: chrome.runtime.getManifest().version, generatedAt: new Date().toISOString(),
+    status: h.status, when: new Date(h.ts).toISOString(), product: h.productName, video: h.video, step: h.step, error: h.error,
+    linkedProduct: h.linkedProduct, attempt: h.attempt, durationMs: h.durationMs, settings: { speed: S.settings.speed, linkProduct: S.settings.linkProduct, brandedContent: S.settings.brandedContent, uploadUrl: S.settings.uploadUrl },
+    log: h.log, diag: h.diag, caption: h.caption, screenshot: h.shot || null,
+  };
+}
+$('#logClose').onclick = () => $('#logDlg').close();
+$('#logCopy').onclick = async () => {
+  if (!logEntry) return;
+  const { screenshot, ...rest } = logReport(logEntry);
+  try { await navigator.clipboard.writeText(JSON.stringify(rest, null, 2)); toast('Relatório copiado ✓ (sem a imagem — para incluir a imagem, use Baixar)'); } catch (_) { toast('Não consegui copiar. Use "Baixar relatório".', true); }
+};
+$('#logDownload').onclick = () => {
+  if (!logEntry) return;
+  const blob = new Blob([JSON.stringify(logReport(logEntry), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `autoposter-registro-${new Date(logEntry.ts).toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+};
+
 // ---------- configurações ----------
 function fillSettings() {
   const f = $('#settingsForm');
@@ -447,7 +503,7 @@ function fillSettings() {
   const hours = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i).map((h) => `<option value="${h}">${String(h).padStart(2, '0')}:00${h === 24 ? ' (meia-noite)' : ''}</option>`).join('');
   f.activeStartHour.innerHTML = hours(0, 23);
   f.activeEndHour.innerHTML = hours(1, 24);
-  for (const k of ['jitterMinutes', 'maxPerDay', 'hashtagsCount', 'activeStartHour', 'activeEndHour', 'videoOrder', 'onExhausted', 'maxRetries', 'pauseAfterFailures', 'uploadUrl']) f[k].value = s[k];
+  for (const k of ['jitterMinutes', 'maxPerDay', 'hashtagsCount', 'activeStartHour', 'activeEndHour', 'videoOrder', 'onExhausted', 'maxRetries', 'pauseAfterFailures', 'uploadUrl', 'speed']) f[k].value = s[k];
   for (const k of ['linkProduct', 'brandedContent', 'foregroundTab', 'closeTabAfter', 'keepAwake', 'telegramEnabled', 'telegramEachPost', 'telegramSummary']) f[k].checked = !!s[k];
   f.telegramSummaryHour.innerHTML = hours(0, 23);
   f.telegramSummaryHour.value = s.telegramSummaryHour ?? 22;
@@ -489,6 +545,7 @@ async function saveSettings(e) {
     linkProduct: f.linkProduct.checked, brandedContent: f.brandedContent.checked,
     foregroundTab: f.foregroundTab.checked, closeTabAfter: f.closeTabAfter.checked,
     keepAwake: f.keepAwake.checked,
+    speed: f.speed.value === 'normal' ? 'normal' : 'human',
     telegramEnabled: f.telegramEnabled.checked,
     telegramToken: f.telegramToken.value.trim(),
     telegramChatId: f.telegramChatId.value.trim(),
@@ -718,6 +775,7 @@ document.addEventListener('click', async (e) => {
     const p = S.catalog[t.dataset.toggleProd];
     return p && send('catalog-save', { key: p.key, data: { enabled: p.enabled === false } });
   }
+  if (t.dataset.log) return openLog(t.dataset.log);
   if (t.dataset.post) return postNow(t.dataset.post);
   if (t.dataset.dry) return dryRun(t.dataset.dry);
   if (t.dataset.skip) return send('set-video-status', { paths: [t.dataset.skip], status: 'skipped' });

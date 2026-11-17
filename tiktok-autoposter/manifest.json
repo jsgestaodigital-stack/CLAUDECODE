@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AutoPoster TikTok Shop",
   "short_name": "AutoPoster",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Posta automaticamente seus vídeos de afiliado no TikTok Studio, com produto vinculado e conteúdo de marca.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "unlimitedStorage", "alarms", "tabs", "scripting", "notifications", "offscreen", "power"],
@@ -11,7 +11,8 @@
     "https://vt.tiktok.com/*",
     "https://vm.tiktok.com/*",
     "https://shop.tiktok.com/*",
-    "https://api.telegram.org/*"
+    "https://api.telegram.org/*",
+    "<all_urls>"
   ],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {

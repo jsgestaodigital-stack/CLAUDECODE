@@ -74,12 +74,21 @@
       if (p >= 100) { clearInterval(t); $('status').textContent = 'Enviado'; $('post').disabled = false; }
     }, 400);
   });
+  // como o editor real (Draft.js): colar substitui o texto selecionado; senão, insere no fim
   $('cap').addEventListener('paste', (e) => {
     e.preventDefault();
     const text = e.clipboardData.getData('text/plain');
-    $('cap').textContent += text;
-    R.events.push('paste');
+    const sel = getSelection();
+    const all = sel.rangeCount && sel.toString() && sel.toString() === $('cap').textContent;
+    $('cap').textContent = (all ? '' : $('cap').textContent) + text;
+    R.pastes = (R.pastes || 0) + 1;
+    R.events.push(all ? 'paste-replace' : 'paste');
+    // modo "crash": imita a tela de erro do TikTok depois da legenda
+    if (Q.has('crash') && $('cap').textContent.includes('#')) {
+      setTimeout(() => { document.body.innerHTML = '<div style="text-align:center;padding:80px"><div style="font-size:80px">🤖</div><h2>Algo deu errado</h2><p>Tente novamente mais tarde.</p></div>'; }, 300);
+    }
   });
+  document.addEventListener('beforeinput', (e) => { if (e.target === $('cap')) R.events.push('beforeinput:' + e.inputType); }, true);
   $('addLink').onclick = () => { $('m1').hidden = false; };
   $('optProducts').onclick = () => { $('m1next').disabled = false; R.events.push('opt-products'); };
   $('m1next').onclick = () => { $('m1').hidden = true; $('m2').hidden = false; };
