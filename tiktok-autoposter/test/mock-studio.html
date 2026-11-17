@@ -159,10 +159,17 @@
     const all = sel.rangeCount && sel.toString() && sel.toString() === $('cap').textContent;
     capState = (all ? '' : capState) + e.data;
     renderCap();
-    R.events.push(all ? 'type-replace' : 'type');
+    R.events.push((all ? 'type-replace' : 'type') + (e.isTrusted ? '' : '-fake'));
     if (Q.has('crash') && capState.includes('#')) {
       setTimeout(() => { document.body.innerHTML = '<div style="text-align:center;padding:80px"><div style="font-size:80px">🤖</div><h2>Algo deu errado</h2><p>Tente novamente mais tarde.</p></div>'; }, 300);
     }
+  });
+  // teclas de verdade: Ctrl+A seleciona (nativo), Backspace e Enter são tratados pelo editor
+  $('cap').addEventListener('keydown', (e) => {
+    const sel = getSelection();
+    const all = sel.rangeCount && sel.toString() && sel.toString() === $('cap').textContent;
+    if (e.key === 'Backspace') { e.preventDefault(); capState = all ? '' : capState.slice(0, -1); renderCap(); R.events.push(e.isTrusted ? 'key-backspace' : 'fake-key'); }
+    if (e.key === 'Enter') { e.preventDefault(); capState += '\n'; renderCap(); R.events.push('key-enter'); }
   });
   $('cap').addEventListener('paste', (e) => {
     e.preventDefault();

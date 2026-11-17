@@ -645,6 +645,46 @@ async function finishJob(state, result) {
   }
 }
 
+// ---------- teclado de verdade (protocolo de automação do Chrome) ----------
+// O editor de legenda do TikTok só aceita digitação real: texto "simulado" ou não é registrado
+// (o post sai com o nome do arquivo) ou trava a página ("Ocorreu um erro"). Aqui as teclas são
+// enviadas pelo próprio Chrome, idênticas às de um teclado.
+const KEYS = {
+  selectAll: { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 }, // Ctrl+A
+  backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+  enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
+  escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
+  end: { key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 2 }, // Ctrl+End
+};
+async function cdpType(tabId, actions) {
+  if (!tabId) return { ok: false, error: 'aba desconhecida' };
+  const target = { tabId };
+  try {
+    await chrome.debugger.attach(target, '1.3');
+  } catch (e) {
+    return { ok: false, error: `não consegui usar o teclado do Chrome (${e.message}). Feche as Ferramentas do desenvolvedor (F12) nessa aba, se estiverem abertas.` };
+  }
+  try {
+    for (const a of actions) {
+      if (a.text != null) {
+        await chrome.debugger.sendCommand(target, 'Input.insertText', { text: a.text });
+      } else if (a.key) {
+        const k = KEYS[a.key];
+        if (!k) continue;
+        const { text, ...rest } = k;
+        await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...rest, ...(text ? { text, unmodifiedText: text } : {}) });
+        await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...rest });
+      }
+      if (a.wait) await sleep(a.wait);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'falha ao digitar: ' + (e.message || e) };
+  } finally {
+    try { await chrome.debugger.detach(target); } catch (_) { /* já solto */ }
+  }
+}
+
 // ---------- importar a vitrine ----------
 async function startSync(state) {
   const rt = state.runtime;
@@ -750,6 +790,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     });
     return false;
+  }
+  if (msg.type === 'cdp-type') {
+    cdpType(sender.tab?.id, msg.actions || []).then(sendResponse, (e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    return true;
   }
   if (msg.type === 'sleep') {
     // espera feita aqui para não sofrer o atraso de timers de abas em segundo plano

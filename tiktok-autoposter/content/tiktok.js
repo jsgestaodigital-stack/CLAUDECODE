@@ -460,40 +460,21 @@
   }
 
   // Estratégias para escrever no editor do TikTok, da mais "teclado de verdade" para a menos.
-  // Evento de digitação que o editor do TikTok (Draft.js/React) escuta. Ele não muda a tela sozinho:
-  // o texto só aparece se o editor o registrar — então "apareceu" = "o editor guardou".
-  function typeEvent(ed, text) {
-    const ev = document.createEvent('TextEvent');
-    ev.initTextEvent('textInput', true, true, window, text, 0, 'pt-BR');
-    ed.dispatchEvent(ev);
+  // Monta a digitação: Ctrl+A e Backspace (apaga o nome do arquivo), depois o texto em pedaços,
+  // com Enter nas quebras de linha e pausas de quem está digitando.
+  function typingActions(caption) {
+    const acts = [{ key: 'selectAll', wait: rnd(250, 500) }, { key: 'backspace', wait: rnd(400, 800) }];
+    caption.replace(/\r/g, '').split('\n').forEach((line, i) => {
+      if (i > 0) acts.push({ key: 'enter', wait: HUMAN ? rnd(300, 700) : 60 });
+      if (!line) return;
+      for (const chunk of chunksOf(line)) {
+        acts.push({ text: chunk, wait: HUMAN ? rnd(140, 420) : 30 });
+        if (HUMAN && Math.random() < 0.08) acts.push({ text: '', wait: rnd(700, 1600) });
+      }
+    });
+    acts.push({ text: ' ', wait: 300 }); // espaço final fecha a lista de sugestões de hashtag
+    return acts;
   }
-
-  // Estratégias para escrever no editor do TikTok, da mais confiável para a menos.
-  const CAPTION_STRATEGIES = [
-    {
-      name: 'digitação (evento de teclado que o editor registra)',
-      async run(ed, caption) {
-        selectAllKeyboard(ed);
-        await human(250, 500);
-        for (const chunk of chunksOf(caption)) {
-          typeEvent(ed, chunk); // o 1º substitui o texto selecionado (nome do arquivo)
-          await sleep(HUMAN ? rnd(140, 420) * (chunk === '\n' ? 2.5 : 1) : 30);
-          if (HUMAN && Math.random() < 0.08) await human(500, 1400);
-        }
-      },
-    },
-    {
-      name: 'digitação (comando de inserir texto do navegador)',
-      async run(ed, caption) {
-        selectAllKeyboard(ed);
-        await human(250, 500);
-        for (const chunk of chunksOf(caption)) {
-          document.execCommand('insertText', false, chunk);
-          await sleep(HUMAN ? rnd(140, 420) : 30);
-        }
-      },
-    },
-  ];
 
   async function writeCaption(caption) {
     const ed = await waitFor(findCaptionEditor, { timeout: 180000, what: 'campo de legenda' });
@@ -502,20 +483,15 @@
     await human(800, 1500);
     await click(ed);
     await human(300, 700);
-    for (const st of CAPTION_STRATEGIES) {
-      logAct(`⌨ escrevendo a legenda por ${st.name} (${caption.length} caracteres${HUMAN ? ', em ritmo humano' : ''})`);
-      await click(ed, { raw: true });
-      await st.run(ed, caption);
-      await sleep(1200);
-      const ok = captionOk(ed, caption, original);
-      logAct(`legenda no campo: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}" → ${ok ? '✓ certa' : '✗ não ficou certa'}`);
-      if (ok) { writtenCaption = { caption, original }; return; }
-      // limpa o campo antes de tentar a próxima forma
-      selectAllKeyboard(ed);
-      typeEvent(ed, ' ');
-      await sleep(600);
-    }
-    throw new Error(`não consegui escrever a legenda no campo do TikTok (o campo ficou: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 100)}"). Não publiquei para não sair com a descrição errada.`);
+    caretToEnd(ed);
+    logAct(`⌨ digitando a legenda com o teclado do Chrome (${caption.length} caracteres${HUMAN ? ', em ritmo humano' : ''}): Ctrl+A, Backspace e o texto`);
+    const r = await chrome.runtime.sendMessage({ type: 'cdp-type', actions: typingActions(caption) });
+    if (!r?.ok) throw new Error(r?.error || 'não consegui digitar a legenda');
+    await sleep(1200);
+    const ok = captionOk(ed, caption, original);
+    logAct(`legenda no campo: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}" → ${ok ? '✓ certa' : '✗ não ficou certa'}`);
+    if (!ok) throw new Error(`a legenda não ficou certa no campo (ficou: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 100)}"). Não publiquei para não sair com a descrição errada.`);
+    writtenCaption = { caption, original };
   }
 
   // Antes de publicar, confere de novo que a legenda continua certa no campo.
