@@ -54,8 +54,13 @@ function sortVideos(videos, order, rand) {
 }
 
 // Um produto só pode ser postado com link se a busca do produto foi configurada pelo usuário.
+// Identifica a configuração do link (para saber se o teste ainda vale depois de uma edição).
+export function linkKey(product) {
+  return `${String(product?.productId || '').trim()}|${String(product?.productQuery || '').trim()}`;
+}
+
 export function isLinkReady(product) {
-  return !!(product && product.configured && String(product.productQuery || '').trim());
+  return !!(product && product.configured && (String(product.productId || '').trim() || String(product.productQuery || '').trim()));
 }
 
 export function productBlocked(product, settings) {
@@ -138,6 +143,8 @@ export function mergeScan(state, files, now = Date.now()) {
       products[f.product] = {
         folder: f.product,
         displayName,
+        productUrl: '',
+        productId: '',
         productQuery: '',
         productLabel: displayName.slice(0, 30),
         niche: 'geral',

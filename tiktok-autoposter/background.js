@@ -1,7 +1,7 @@
 // Service worker: agenda, escolhe o próximo vídeo, abre o TikTok Studio e coordena a postagem.
 import { DEFAULT_SETTINGS, DEFAULT_LABELS } from './lib/defaults.js';
 import {
-  computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked,
+  computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked, linkKey,
 } from './lib/scheduler.js';
 import { generateCaption, rememberCaption } from './lib/captions.js';
 
@@ -40,8 +40,65 @@ function addHistory(state, entry) {
   state.history = [{ id: crypto.randomUUID(), ts: Date.now(), ...entry }, ...state.history].slice(0, HISTORY_LIMIT);
 }
 
-function notify(title, message) {
+// Aviso no Windows (notificação do Chrome) e, se configurado, no celular pelo Telegram.
+function notify(title, message, { telegram = true } = {}) {
   chrome.notifications.create({ type: 'basic', iconUrl: 'icons/icon128.png', title, message, priority: 2 });
+  if (telegram) telegramFromSettings(`${title}\n${message}`);
+}
+
+async function telegramFromSettings(text) {
+  try {
+    const { settings } = await chrome.storage.local.get('settings');
+    if (settings?.telegramEnabled && settings.telegramToken && settings.telegramChatId) {
+      await telegramSend(settings.telegramToken, settings.telegramChatId, text);
+    }
+  } catch (e) { log('telegram', e); }
+}
+
+async function telegramSend(token, chatId, text) {
+  const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(token.trim())}/sendMessage`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ chat_id: String(chatId).trim(), text: `🤖 AutoPoster\n${text}`, disable_web_page_preview: true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!data.ok) throw new Error(data.description || `Telegram respondeu ${res.status}`);
+  return data;
+}
+
+// Mantém o computador acordado enquanto o AutoPoster estiver rodando (a tela pode desligar).
+function syncPower(rt, settings) {
+  try {
+    if (rt?.running && settings?.keepAwake !== false) chrome.power.requestKeepAwake('system');
+    else chrome.power.releaseKeepAwake();
+  } catch (_) { /* sem a permissão power */ }
+}
+
+// Resumo diário pelo Telegram.
+async function maybeDailySummary(state) {
+  const s = state.settings;
+  const rt = state.runtime;
+  if (!s.telegramEnabled || !s.telegramSummary || !s.telegramToken || !s.telegramChatId) return;
+  const now = new Date();
+  const day = now.toDateString();
+  if (now.getHours() < Number(s.telegramSummaryHour ?? 22) || rt.lastSummaryDay === day) return;
+  rt.lastSummaryDay = day;
+  await save({ runtime: rt });
+  const since = new Date(now); since.setHours(0, 0, 0, 0);
+  const today = state.history.filter((h) => h.ts >= since.getTime());
+  const posted = today.filter((h) => h.status === 'posted').length;
+  const failed = today.filter((h) => h.status === 'failed').length;
+  const check = Object.values(state.videos).filter((v) => v.status === 'unconfirmed').length;
+  const pending = Object.values(state.videos).filter((v) => v.status === 'pending').length;
+  const lines = [
+    `📊 Resumo de hoje`,
+    `✅ Publicados: ${posted}`,
+    `❌ Falhas: ${failed}`,
+    check ? `⚠️ Para conferir no TikTok: ${check}` : null,
+    `🎬 Vídeos na fila: ${pending}`,
+    rt.running ? `▶️ Rodando${rt.nextRunAt ? ` — próximo post ~${new Date(rt.nextRunAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}` : '⏸ Pausado',
+  ].filter(Boolean);
+  telegramSend(s.telegramToken, s.telegramChatId, lines.join('\n')).catch((e) => log('telegram summary', e));
 }
 
 // ---------- documento invisível (leitura dos arquivos) ----------
@@ -94,6 +151,7 @@ chrome.runtime.onStartup.addListener(async () => {
     const state = await load();
     // IDs de abas não valem entre sessões do Chrome
     state.runtime.staleTabId = null;
+    syncPower(state.runtime, state.settings);
     if (state.runtime.currentJob) state.runtime.currentJob.tabId = null;
     await save({ runtime: state.runtime });
     if (state.runtime.currentJob) {
@@ -124,6 +182,8 @@ async function tick() {
   const state = await load();
   const rt = state.runtime;
   const now = Date.now();
+  syncPower(rt, state.settings);
+  await maybeDailySummary(state);
 
   if (rt.currentJob) {
     const job = rt.currentJob;
@@ -238,7 +298,10 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     path: pick.video.path,
     product: pick.product,
     productName: product.displayName,
-    productQuery: state.settings.linkProduct ? (product.productQuery || product.displayName) : '',
+    linkProduct: !!state.settings.linkProduct,
+    productId: state.settings.linkProduct ? String(product.productId || '').trim() : '',
+    productQuery: state.settings.linkProduct ? String(product.productQuery || '').trim() : '',
+    linkKey: linkKey(product),
     productLabel: (product.productLabel || product.displayName || '').slice(0, 30),
     caption,
     captionMeta: { body: cap.body, hashtags: cap.hashtags, hook: cap.hook },
@@ -333,7 +396,7 @@ async function finishJob(state, result) {
   const job = rt.currentJob;
   if (!job || (result.jobId && result.jobId !== job.id)) return lateResult(state, result);
   rt.currentJob = null;
-  rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun, productQuery: job.productQuery }, ...(rt.recentJobs || [])].slice(0, 5);
+  rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun }, ...(rt.recentJobs || [])].slice(0, 5);
   const s = state.settings;
   const v = state.videos[job.path];
   const product = state.products[job.product];
@@ -348,11 +411,30 @@ async function finishJob(state, result) {
     });
     rt.lastTestAt = now;
     rt.lastTestOk = !!result.ok;
-    if (result.ok && product && job.productQuery) {
-      state.products[job.product] = { ...product, linkTestedAt: now, linkTestedQuery: job.productQuery, linkTestedMatch: result.linkedProduct || null };
+    if (result.ok && product && job.linkProduct) {
+      state.products[job.product] = { ...product, linkTestedAt: now, linkTestedKey: job.linkKey, linkTestedMatch: result.linkedProduct || null };
     }
     await save({ runtime: rt, history: state.history, products: state.products });
     notify(result.ok ? 'Teste concluído ✅' : 'Teste falhou ❌', result.ok ? 'Tudo preenchido. A aba ficou aberta para você conferir (nada foi publicado).' : `${result.step}: ${result.error}`);
+    return;
+  }
+
+  if (!result.ok && result.loggedOut) {
+    // Sessão do TikTok caiu: não é culpa do vídeo. Pausa tudo até você entrar de novo.
+    if (job.tabId) rt.staleTabId = job.tabId;
+    addHistory(state, {
+      status: 'failed', product: job.product, productName: job.productName, video: job.path,
+      error: 'Você não está logado no TikTok neste Chrome. Entre na sua conta e clique em Iniciar.', step: result.step, diag: result.diag, durationMs, log: result.log,
+    });
+    rt.retry = null;
+    if (rt.running) {
+      rt.running = false;
+      rt.nextRunAt = null;
+      rt.pausedReason = 'logged-out';
+    }
+    await save({ runtime: rt, history: state.history });
+    syncPower(rt, s);
+    notify('AutoPoster pausado: TikTok deslogado 🔒', 'Entre na sua conta do TikTok neste Chrome e clique em Iniciar no painel.');
     return;
   }
 
@@ -362,7 +444,7 @@ async function finishJob(state, result) {
       state.products[job.product] = {
         ...product, lastPostedAt: now,
         ...rememberCaption(product, { text: job.caption, ...(job.captionMeta || {}) }),
-        ...(job.productQuery ? { linkTestedAt: now, linkTestedQuery: job.productQuery, linkTestedMatch: result.linkedProduct || product.linkTestedMatch || null } : {}),
+        ...(job.linkProduct ? { linkTestedAt: now, linkTestedKey: job.linkKey, linkTestedMatch: result.linkedProduct || product.linkTestedMatch || null } : {}),
       };
     }
     rt.lastProduct = job.product;
@@ -373,6 +455,9 @@ async function finishJob(state, result) {
       caption: job.caption, durationMs, url: result.url, attempt: job.attempt, log: result.log, linkedProduct: result.linkedProduct,
     });
     if (rt.running) rt.nextRunAt = computeNextRun(now, s);
+    if (s.telegramEnabled && s.telegramEachPost) {
+      telegramFromSettings(`✅ Publicado: ${job.productName} (${job.path.split('/').pop()})${result.linkedProduct ? `\n🛒 ${result.linkedProduct.slice(0, 80)}` : ''}`);
+    }
   } else if (result.clickedPublish || (result.aborted && job.step === 'Publicando')) {
     // Falhou DEPOIS de clicar em Publicar: o vídeo pode ter saído. Não tenta de novo (evita post duplicado).
     if (job.tabId && !result.aborted) rt.staleTabId = job.tabId;
@@ -398,6 +483,7 @@ async function finishJob(state, result) {
       if (rt.consecutiveFailures >= (s.pauseAfterFailures || 3)) {
         rt.running = false;
         rt.nextRunAt = null;
+        rt.pausedReason = 'failures';
         notify('AutoPoster pausado ⚠️', `${rt.consecutiveFailures} falhas seguidas. Último erro: ${result.error}`);
       } else {
         rt.retry = willRetry ? { path: job.path, attempt: job.attempt } : null;
@@ -407,6 +493,7 @@ async function finishJob(state, result) {
     }
   }
   await save({ runtime: rt, history: state.history, videos: state.videos, products: state.products });
+  syncPower(rt, s);
 
   if (job.tabId && (result.ok ? s.closeTabAfter : false)) {
     setTimeout(() => closeTikTokTab(job.tabId), 4000);
@@ -477,16 +564,55 @@ async function command(name, p) {
     case 'start':
       rt.running = true;
       rt.consecutiveFailures = 0;
+      rt.pausedReason = null;
       rt.nextRunAt = Date.now() + MIN;
       await save({ runtime: rt });
       await ensureAlarm();
+      syncPower(rt, state.settings);
       return { ok: true };
     case 'pause':
       rt.running = false;
       rt.nextRunAt = null;
       rt.retry = null;
+      rt.pausedReason = null;
       await save({ runtime: rt });
+      syncPower(rt, state.settings);
       return { ok: true };
+    case 'telegram-test': {
+      const t = p.token || state.settings.telegramToken;
+      const c = p.chatId || state.settings.telegramChatId;
+      if (!t || !c) return { ok: false, error: 'Preencha o token do bot e o chat ID.' };
+      try { await telegramSend(t, c, '✅ Teste: os avisos do AutoPoster vão chegar aqui.'); return { ok: true }; } catch (e) { return { ok: false, error: 'Telegram: ' + e.message }; }
+    }
+    case 'telegram-find-chat': {
+      const t = (p.token || '').trim();
+      if (!t) return { ok: false, error: 'Cole o token do bot primeiro.' };
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${encodeURIComponent(t)}/getUpdates`);
+        const data = await res.json();
+        if (!data.ok) return { ok: false, error: 'Telegram: ' + (data.description || 'token inválido') };
+        const msgs = (data.result || []).map((u) => u.message || u.channel_post || u.my_chat_member).filter(Boolean);
+        const last = msgs[msgs.length - 1];
+        if (!last?.chat?.id) return { ok: false, error: 'Mande qualquer mensagem para o seu bot no Telegram e clique de novo.' };
+        return { ok: true, chatId: String(last.chat.id), name: last.chat.first_name || last.chat.title || '' };
+      } catch (e) { return { ok: false, error: 'Telegram: ' + e.message }; }
+    }
+    case 'export': {
+      const data = await chrome.storage.local.get(['settings', 'products', 'videos']);
+      return { ok: true, data: { app: 'autoposter-tiktok-shop', version: 1, exportedAt: new Date().toISOString(), ...data } };
+    }
+    case 'import': {
+      const d = p.data || {};
+      if (d.app !== 'autoposter-tiktok-shop' || typeof d.products !== 'object') return { ok: false, error: 'Esse arquivo não é um backup do AutoPoster.' };
+      const settings = { ...DEFAULT_SETTINGS, ...(d.settings || {}) };
+      settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
+      rt.running = false;
+      rt.nextRunAt = null;
+      rt.retry = null;
+      await save({ settings, products: d.products || {}, videos: d.videos || state.videos, runtime: rt });
+      syncPower(rt, settings);
+      return { ok: true, products: Object.keys(d.products || {}).length };
+    }
     case 'post-now':
       return startJob(state, { dryRun: false, videoPath: p.path });
     case 'dry-run':
@@ -512,9 +638,9 @@ async function command(name, p) {
       const prev = state.products[p.folder];
       if (!prev) return { ok: false, error: 'Produto não encontrado.' };
       const next = { ...prev, ...p.data, folder: p.folder };
-      if ('productQuery' in p.data) {
-        next.configured = !!String(next.productQuery || '').trim();
-        if (next.productQuery !== prev.productQuery) next.linkTestedAt = null;
+      if ('productQuery' in p.data || 'productId' in p.data) {
+        next.configured = !!(String(next.productId || '').trim() || String(next.productQuery || '').trim());
+        if (linkKey(next) !== linkKey(prev)) next.linkTestedAt = null;
       }
       state.products[p.folder] = next;
       await save({ products: state.products });

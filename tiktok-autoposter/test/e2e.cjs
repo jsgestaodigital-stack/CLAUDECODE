@@ -15,10 +15,28 @@ fs.mkdirSync(SHOTS, { recursive: true });
 
 // Servidor HTTPS local que responde no lugar de www.tiktok.com (o Chromium é apontado para ele).
 let pageBody = MOCK;
+const telegram = [];
 function startServer() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ttap-cert-'));
   execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${dir}/k.pem -out ${dir}/c.pem -days 1 -subj /CN=www.tiktok.com 2>/dev/null`);
   const srv = https.createServer({ key: fs.readFileSync(`${dir}/k.pem`), cert: fs.readFileSync(`${dir}/c.pem`) }, (req, res) => {
+    const host = (req.headers.host || '').split(':')[0];
+    if (host === 'vt.tiktok.com') { // link curto de compartilhamento → redireciona para o produto
+      res.writeHead(302, { location: 'https://www.tiktok.com/view/product/1729384756999?region=BR' });
+      return res.end();
+    }
+    if (host === 'api.telegram.org') { // API do Telegram simulada
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        telegram.push({ path: req.url, body: body ? JSON.parse(body) : null });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(req.url.endsWith('/getUpdates')
+          ? { ok: true, result: [{ message: { chat: { id: 4242, first_name: 'Teste' }, text: 'oi' } }] }
+          : { ok: true, result: {} }));
+      });
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(pageBody);
   });
@@ -37,7 +55,7 @@ async function main() {
   const ctx = await chromium.launchPersistentContext(userDir, {
     headless: false,
     args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-proxy-server',
-      `--host-resolver-rules=MAP www.tiktok.com:443 127.0.0.1:${port}`, '--ignore-certificate-errors'],
+      `--host-resolver-rules=MAP www.tiktok.com:443 127.0.0.1:${port}, MAP vt.tiktok.com:443 127.0.0.1:${port}, MAP api.telegram.org:443 127.0.0.1:${port}`, '--ignore-certificate-errors'],
     viewport: { width: 1440, height: 960 },
   });
   const errors = [];
@@ -110,10 +128,14 @@ async function main() {
   console.log('2) Configurar os links pelo formulário do produto');
   await dash.click('[data-view="products"]');
   assert(await dash.isVisible('#navProdBadge'), 'menu mostra quantos produtos faltam configurar');
-  async function configure(folder, query, extra = {}) {
+  async function configure(folder, extra = {}) {
     await dash.click(`[data-edit="${folder}"]`);
     await dash.waitForSelector('#productDlg[open]');
-    await dash.fill('#productForm [name="productQuery"]', query);
+    if (extra.link) {
+      await dash.fill('#productForm [name="productUrl"]', extra.link);
+      await dash.waitForFunction(() => /✓ ID do produto|✗/.test(document.querySelector('#pdLinkStatus').textContent), null, { timeout: 15000 });
+    }
+    if (extra.query) await dash.fill('#productForm [name="productQuery"]', extra.query);
     if (extra.name) await dash.fill('#productForm [name="displayName"]', extra.name);
     if (extra.label) await dash.fill('#productForm [name="productLabel"]', extra.label);
     if (extra.niche) await dash.selectOption('#pdNiche', extra.niche);
@@ -123,12 +145,22 @@ async function main() {
     await dash.waitForSelector('#productDlg:not([open])', { state: 'attached' });
     await sleep(400);
   }
-  await configure('fone-bluetooth-x', '1729384756123', { name: 'Fone Bluetooth X', label: 'Fone Bluetooth X Pro', niche: 'eletronicos', benefits: 'bateria de 30 horas\ncancelamento de ruído', shot: '03-produto.png' });
-  await configure('escova-secadora', 'Escova Secadora Rotativa', { niche: 'cabelo' });
-  await configure('kit-ambiguo', 'ambiguo');
+  await configure('fone-bluetooth-x', { link: 'Olha esse: https://www.tiktok.com/view/product/1729384756123?region=BR&u_code=xyz', query: 'Fone Bluetooth X Pro Max', name: 'Fone Bluetooth X', label: 'Fone Bluetooth X Pro', niche: 'eletronicos', benefits: 'bateria de 30 horas\ncancelamento de ruído', shot: '03-produto.png' });
+  await configure('escova-secadora', { query: 'Escova Secadora Rotativa', niche: 'cabelo' });
+  await configure('kit-ambiguo', { query: 'ambiguo' });
+  // link curto de compartilhamento (vt.tiktok.com): a extensão segue o redirecionamento e acha o ID
+  await dash.click('[data-edit="sem-link"]');
+  await dash.waitForSelector('#productDlg[open]');
+  await dash.fill('#productForm [name="productUrl"]', 'https://vt.tiktok.com/ZSabc123/');
+  await dash.waitForFunction(() => /✓ ID do produto|✗/.test(document.querySelector('#pdLinkStatus').textContent), null, { timeout: 15000 });
+  const shortStatus = await dash.textContent('#pdLinkStatus');
+  assert(shortStatus.includes('1729384756999'), 'link curto vt.tiktok.com resolvido: ' + shortStatus.trim());
+  await dash.click('#productForm button[value="cancel"]:not(.x)');
+  await sleep(300);
   st = await get(['products']);
   const fone = st.products['fone-bluetooth-x'];
-  assert(fone.configured && fone.productQuery === '1729384756123' && fone.niche === 'eletronicos' && fone.benefits.includes('30 horas'), 'produto salvo com link, nicho e benefícios');
+  assert(fone.configured && fone.productId === '1729384756123' && fone.productUrl.includes('/product/') && fone.niche === 'eletronicos' && fone.benefits.includes('30 horas'), 'ID extraído do link colado e salvo com nicho e benefícios');
+  assert(!st.products['sem-link'].configured, 'cancelar não salva');
   assert(!st.products['sem-link'].configured, 'produto sem link continua fora da fila');
   await dash.screenshot({ path: path.join(SHOTS, '02-produtos.png') });
 
@@ -321,12 +353,56 @@ async function main() {
     assert(kept >= 3 && kept <= 4, `hashtags: ${kept} mantidas, ${5 - kept} trocadas`);
   }
 
-  console.log('13) Falha controlada (página sem campo de upload)');
-  pageBody = '<p>Faça login</p>';
+  console.log('12b) Busca pelo ID não funciona → plano B pelo nome, conferido');
+  await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?noidsearch=1' } });
+  await cmd('set-video-status', { paths: ['fone-bluetooth-x/v02.mp4'], status: 'pending' });
+  pp = nextTikTokPage();
+  await cmd('dry-run', { path: 'fone-bluetooth-x/v02.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.dryRun && x.video === 'fone-bluetooth-x/v02.mp4');
+  res = await tt.evaluate(() => window.__result);
+  if (h.status !== 'dry-run') console.log(JSON.stringify(h, null, 2));
+  assert(h.status === 'dry-run' && res.searches.join('|') === '1729384756123|Fone Bluetooth X Pro Max' && res.pickedText.includes('Fone Bluetooth X Pro Max'), 'tentou o ID, depois achou pelo nome');
+  await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
+
+  console.log('13) TikTok deslogado → pausa e avisa, vídeo continua na fila');
+  pageBody = '<h1>Entrar no TikTok</h1><p>Usar telefone / e-mail / nome de usuário</p>';
+  await cmd('save-settings', { settings: { telegramEnabled: true, telegramToken: '123:ABC', telegramChatId: '4242' } });
+  await cmd('start');
   await cmd('post-now', { path: 'escova-secadora/a2.mp4' });
-  h = await waitHistory((x) => x.video === 'escova-secadora/a2.mp4' && x.status === 'failed' && /upload/i.test(x.error), 150000);
-  assert(/upload/i.test(h.error) && h.diag && h.diag.url, `falha registrada com diagnóstico: "${h.error}"`);
+  h = await waitHistory((x) => x.video === 'escova-secadora/a2.mp4' && x.status === 'failed' && /logado/.test(x.error), 150000);
+  st = await get(['runtime', 'videos']);
+  assert(!st.runtime.running && st.runtime.pausedReason === 'logged-out', 'pausou com motivo "deslogado"');
+  assert(st.videos['escova-secadora/a2.mp4'].status !== 'failed', 'vídeo não foi marcado como falho');
+  await dash.click('[data-view="overview"]');
+  await dash.waitForFunction(() => document.querySelector('#banner').textContent.includes('deslogado'));
+  assert(true, 'painel mostra aviso de TikTok deslogado');
+  await sleep(1500);
+  assert(telegram.some((m) => m.body && /deslogado/.test(m.body.text) && m.body.chat_id === '4242'), 'aviso enviado ao Telegram');
   pageBody = MOCK;
+
+  console.log('13b) Telegram e backup pela tela de configurações');
+  await dash.click('[data-view="settings"]');
+  assert(await dash.isVisible('#tgFields'), 'campos do Telegram aparecem quando ligado');
+  await dash.fill('#settingsForm [name="telegramChatId"]', '');
+  await dash.click('#btnTgFind');
+  await dash.waitForFunction(() => document.querySelector('#settingsForm [name="telegramChatId"]').value === '4242');
+  assert(true, '"Descobrir meu chat ID" preencheu o chat');
+  const tgBefore = telegram.length;
+  await dash.click('#btnTgTest');
+  await sleep(1500);
+  assert(telegram.length === tgBefore + 1 && /Teste/.test(telegram[telegram.length - 1].body.text), 'mensagem de teste enviada');
+  await dash.click('#settingsForm button[type="submit"]');
+  await sleep(500);
+  const exp = await cmd('export');
+  assert(exp.ok && exp.data.products['fone-bluetooth-x'].productId === '1729384756123', 'backup exportado com os produtos');
+  await cmd('save-product', { folder: 'fone-bluetooth-x', data: { productUrl: '', productId: '', productQuery: '' } });
+  assert(!(await get(['products'])).products['fone-bluetooth-x'].configured, 'link apagado');
+  const imp = await cmd('import', { data: exp.data });
+  assert(imp.ok && (await get(['products'])).products['fone-bluetooth-x'].productId === '1729384756123', 'backup importado restaurou o link');
+  await dash.click('[data-view="help"]');
+  const [download] = await Promise.all([dash.waitForEvent('download'), dash.click('#btnExport')]);
+  assert(/autoposter-backup-.*\.json/.test(download.suggestedFilename()), 'botão Exportar baixa o arquivo ' + download.suggestedFilename());
 
   console.log('14) Histórico, ajuda e tema claro');
   await dash.click('[data-view="history"]');

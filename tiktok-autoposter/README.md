@@ -45,7 +45,8 @@ O painel abre no tema escuro e mostra uma **configuração em 4 passos**:
 
 1. **Escolher a pasta.** Quando o Chrome perguntar, permita e, se aparecer, escolha **“Permitir em todas as visitas”**.
 2. **Configurar os links.** Em **Produtos → Configurar link**:
-   - **ID ou nome exato do produto:** o que a extensão digita na busca de **Adicionar link → Produtos** do TikTok Studio. Use o **ID do produto**, que é o jeito mais seguro.
+   - **Link do produto:** cole o link do produto do TikTok Shop. Serve o link completo (`…/view/product/1729…`) ou o link curto de compartilhar (`vt.tiktok.com/…`). A extensão mostra na hora o **ID** que achou.
+   - **Nome do produto como aparece no TikTok Shop:** é o plano B da busca. Copie o título do produto.
    - **Nome no link do produto:** o texto do carrinho (até 30 caracteres).
    - **Nicho:** define as hashtags (beleza, cabelo, casa, cozinha, eletrônicos, moda, fitness, pet, infantil, saúde, carro, acessórios ou geral).
    - **Benefícios (opcional):** um por linha. Entram nas legendas.
@@ -58,7 +59,9 @@ O painel abre no tema escuro e mostra uma **configuração em 4 passos**:
 ## Garantia do link certo
 
 - Um produto **só entra na fila depois que o link dele for configurado**. Sem isso, a extensão recusa postar o produto.
-- Na busca do TikTok Studio, a extensão **só escolhe o resultado que corresponde** ao ID (o número precisa aparecer no item) ou ao nome (palavras inteiras).
+- O **ID** vem do link que você colou; links curtos são abertos para descobrir o destino.
+- No TikTok Studio a extensão **busca primeiro pelo ID** e só escolhe o item que tem esse ID. Se a busca por ID não trouxer o produto, ela **busca pelo nome**. Aí só aceita um item cujo nome bate por palavras inteiras e que não mostre outro ID.
+- O produto precisa estar na sua **vitrine de afiliado**.
 - Se **nada corresponder** ou houver **mais de um produto parecido**, ela **não publica** e avisa no Histórico, com a lista do que apareceu na tela.
 - Cada post registra no Histórico **qual produto foi vinculado**.
 
@@ -82,6 +85,15 @@ O painel abre no tema escuro e mostra uma **configuração em 4 passos**:
 - **Cancelar** ou **tempo esgotado** (35 min, ou 6 min sem resposta da página) fecham a aba do TikTok na hora, para nada ser publicado depois.
 - A pasta é **lida de novo antes de cada post**: vídeos novos entram na fila sozinhos.
 - Funciona com a aba do TikTok em **segundo plano**. As esperas são feitas pela extensão, para o Chrome não atrasá-las.
+
+## Para rodar 24 horas
+
+- **Computador acordado:** enquanto está rodando, a extensão **impede o Windows de suspender**. A tela pode apagar normalmente.
+- **TikTok deslogado:** se a sessão cair, a extensão **pausa**, avisa e mantém o vídeo na fila. Entre de novo e clique em *Iniciar*.
+- **Avisos no celular (Telegram):** em Configurações → *Avisos no celular*, crie um bot no @BotFather, cole o token e clique em *Descobrir meu chat ID*. Você recebe falhas, pausas, posts para conferir e um **resumo diário** (opcionalmente, um aviso a cada post).
+- **Chrome reiniciou?** Ao abrir o Chrome de novo, o AutoPoster continua de onde parou. Para abrir sozinho: Configurações do Chrome → *Ao iniciar* → *Continuar de onde parou*. Também coloque o Chrome para abrir com o Windows.
+- **Pasta no Google Drive:** marque a pasta como *Disponível off-line* para os vídeos estarem no disco.
+- **Backup:** em Ajuda → *Exportar backup* você guarda produtos, links e configurações num arquivo. *Importar backup* restaura tudo.
 
 ## Se o TikTok mudar a tela
 

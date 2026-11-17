@@ -91,7 +91,9 @@
       let rows;
       if (q === 'ambiguo') rows = ['Kit ambiguo azul', 'Kit ambiguo rosa'];
       else if (q === 'semresultado') rows = ['Produto aleatório A', 'Produto aleatório B'];
+      else if (Q.has('noidsearch') && /^\d+$/.test(q)) rows = ['Produto aleatório A', 'Produto aleatório B'];
       else rows = ['Outro produto qualquer', `${q} — Produto encontrado`, 'Mais um produto'];
+      R.searches = (R.searches || []).concat(q);
       if (Q.has('roleradio')) {
         // variante: cada item tem um <input> escondido + um [role=radio] visível
         $('results').innerHTML = rows.map((t, i) => `<div class="row" role="radio" aria-checked="false" data-i="${i}"><input type="radio" name="p" value="${i}" style="display:none"><span>${t}</span> <span>R$ 49,90</span></div>`).join('');

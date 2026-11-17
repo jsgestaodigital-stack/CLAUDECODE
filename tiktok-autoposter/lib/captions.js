@@ -111,21 +111,21 @@ const PRODUCT_LINES = [
   '{produto} {entrega|cumpre} o que promete: {beneficio}.',
   'Conheça {produto}: {beneficio} e {beneficio2}.',
   '{produto} virou {sucesso|tendência}: {beneficio}.',
-  '{produto}! {Beneficio} e ainda {beneficio2}.',
+  '{produto}: {beneficio} e {beneficio2}.',
 ];
 
 const CTAS = [
   'Link no carrinho laranja 🛒',
   'Toca no carrinho e garante já 🛒',
-  'Corre no carrinho antes que acabe 🛒',
-  'Tá no carrinho com preço especial 🛒',
+  'Corre no carrinho e confere 🛒',
+  'Tá no carrinho aqui do vídeo 🛒',
   'Clica no carrinho 🛒 e confere o preço',
   'Garante pelo carrinho aqui do vídeo 🛒',
   'Carrinho laranja aqui embaixo 👇🛒',
-  'Aproveita que tá com desconto no carrinho 🛒',
+  'Confere o preço no carrinho 🛒',
   'Compra segura pelo carrinho do TikTok Shop 🛒',
   'Pega o seu no carrinho 🛒',
-  'Tá acabando o estoque, corre no carrinho 🏃🛒',
+  'Corre lá no carrinho 🏃🛒',
   'O link tá no carrinho, só tocar 🛒',
 ];
 

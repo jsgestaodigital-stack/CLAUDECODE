@@ -209,12 +209,39 @@
           <h2><svg class="i"><use href="#i-shield"/></svg>Publicação</h2>
           <label class="switch"><input type="checkbox" name="linkProduct"><i></i><span><b>Vincular produto do TikTok Shop (carrinho laranja)</b><small>Produtos sem link configurado ficam fora da fila enquanto isto estiver ligado.</small></span></label>
           <label class="switch"><input type="checkbox" name="brandedContent"><i></i><span><b>Marcar “Conteúdo de marca” (marca de terceiros)</b><small>Liga “Divulgar conteúdo do vídeo” → “Conteúdo de marca”.</small></span></label>
+          <label class="switch"><input type="checkbox" name="keepAwake"><i></i><span><b>Impedir o computador de suspender enquanto estiver rodando</b><small>A tela pode apagar normalmente; só o modo de suspensão é bloqueado.</small></span></label>
           <label class="switch"><input type="checkbox" name="foregroundTab"><i></i><span><b>Abrir a aba do TikTok em primeiro plano</b><small>Ligue se as postagens travarem com a aba em segundo plano.</small></span></label>
           <label class="switch"><input type="checkbox" name="closeTabAfter"><i></i><span><b>Fechar a aba após publicar</b><small>Abas com falha ficam abertas até a próxima tentativa, para você ver o que aconteceu.</small></span></label>
           <div class="row3" style="margin-top:14px">
             <label class="field"><span>Novas tentativas por vídeo</span><input type="number" name="maxRetries" min="0" max="3"></label>
             <label class="field"><span>Pausar após falhas seguidas</span><input type="number" name="pauseAfterFailures" min="1" max="20"></label>
             <span></span>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2><svg class="i"><use href="#i-send"/></svg>Avisos no celular (Telegram)</h2>
+          <label class="switch"><input type="checkbox" name="telegramEnabled"><i></i><span><b>Receber avisos no Telegram</b><small>Falhas, pausas, TikTok deslogado, posts para conferir e um resumo diário.</small></span></label>
+          <div id="tgFields">
+            <ol class="steps small" style="margin:6px 0 16px">
+              <li>No Telegram, abra o <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>, envie <code>/newbot</code> e copie o <b>token</b>.</li>
+              <li>Abra o seu bot novo e mande qualquer mensagem (ex.: “oi”).</li>
+              <li>Cole o token abaixo e clique em <b>Descobrir meu chat ID</b>.</li>
+            </ol>
+            <div class="row2">
+              <label class="field"><span>Token do bot</span><input name="telegramToken" type="password" autocomplete="off" spellcheck="false" placeholder="123456:ABC-DEF…"></label>
+              <label class="field"><span>Chat ID</span><input name="telegramChatId" autocomplete="off" spellcheck="false" placeholder="ex.: 123456789"></label>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+              <button type="button" class="btn small" id="btnTgFind">Descobrir meu chat ID</button>
+              <button type="button" class="btn small" id="btnTgTest">Enviar mensagem de teste</button>
+            </div>
+            <label class="switch"><input type="checkbox" name="telegramEachPost"><i></i><span><b>Avisar a cada post publicado</b></span></label>
+            <div class="row3" style="align-items:end">
+              <label class="switch" style="border:0"><input type="checkbox" name="telegramSummary"><i></i><span><b>Resumo diário</b></span></label>
+              <label class="field" style="margin:0"><span>Horário do resumo</span><select name="telegramSummaryHour"></select></label>
+              <span></span>
+            </div>
           </div>
         </div>
 
@@ -264,6 +291,14 @@
           <p class="muted small" style="margin-top:6px">Cada legenda junta um gancho, um benefício do produto e uma chamada para o carrinho, sem repetir as últimas 20. As 5 hashtags são 3 do nicho e 2 amplas (TikTok Shop/achadinhos); de um post para o outro, 1 ou 2 mudam.</p>
           <p class="muted small" style="margin-top:6px">Legenda fixa para um vídeo: crie um <code>.txt</code> com o mesmo nome do vídeo.</p>
           <hr>
+          <h3>Backup</h3>
+          <p class="muted small" style="margin:6px 0 12px">Salva produtos, links, legendas e configurações num arquivo. Use para trocar de computador ou reinstalar a extensão.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn small" id="btnExport">Exportar backup</button>
+            <button class="btn small" id="btnImport">Importar backup</button>
+            <input type="file" id="importFile" accept="application/json,.json" hidden>
+          </div>
+          <hr>
           <button class="btn small danger" id="btnResetAll">Apagar todos os dados da extensão</button>
         </div>
       </div>
@@ -277,10 +312,15 @@
       <div class="dlg-body">
         <div class="dlg-sec">
           <h3><svg class="i"><use href="#i-cart"/></svg>Link do produto (carrinho laranja)</h3>
-          <div class="callout"><svg class="i"><use href="#i-info"/></svg><div>No TikTok Studio, em <b>Adicionar link → Produtos</b>, a extensão busca pelo texto abaixo e só vincula o resultado que <b>corresponder exatamente</b>. Se nada corresponder ou houver mais de um produto parecido, ela <b>não posta</b> e avisa. O <b>ID do produto</b> é o jeito mais seguro (fica no link do produto ou na sua vitrine de afiliado).</div></div>
+          <div class="callout"><svg class="i"><use href="#i-info"/></svg><div>Cole o <b>link do produto</b> (do app ou do site, pode ser o link curto de compartilhar). A extensão tira o <b>ID</b> do link e, no TikTok Studio, só vincula o produto que tiver esse ID. Se a busca pelo ID não funcionar, ela tenta pelo <b>nome</b> e confere. Se nada bater certinho, ela <b>não posta</b> e avisa. O produto precisa estar na sua <b>vitrine de afiliado</b>.</div></div>
+          <label class="field"><span>Link do produto no TikTok Shop <span class="req">*</span></span>
+            <input name="productUrl" placeholder="https://www.tiktok.com/view/product/1729… ou https://vt.tiktok.com/…" autocomplete="off" spellcheck="false">
+            <small id="pdLinkStatus"></small>
+          </label>
+          <input type="hidden" name="productId">
           <div class="row2">
-            <label class="field"><span>ID ou nome exato do produto <span class="req">*</span></span><input name="productQuery" placeholder="ex.: 1729384756123456789" autocomplete="off"><small id="pdQueryHint"></small></label>
-            <label class="field"><span>Nome no link do produto (até 30)</span><input name="productLabel" maxlength="30" autocomplete="off"><small><span id="pdLabelCount">0</span>/30 caracteres</small></label>
+            <label class="field"><span>Nome do produto como aparece no TikTok Shop</span><input name="productQuery" placeholder="ex.: Escova Secadora Rotativa 3 em 1" autocomplete="off"><small>Plano B para a busca. Copie o título do produto (ou o começo dele).</small></label>
+            <label class="field"><span>Nome no link do produto (até 30)</span><input name="productLabel" maxlength="30" autocomplete="off"><small><span id="pdLabelCount">0</span>/30 · texto que aparece no carrinho</small></label>
           </div>
         </div>
 

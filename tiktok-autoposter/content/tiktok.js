@@ -336,55 +336,48 @@
   }
   const signature = (rows) => (rows || []).map((r) => r.text).join('|');
 
-  // Regras (palavras inteiras, números incluídos):
-  // - ID: o número precisa aparecer no item (texto ou atributos). Se a busca pelo ID devolver
-  //   um único item, diferente da lista que estava antes da busca, ele é aceito.
-  // - Nome: a sequência de palavras da busca aparece no item; ou todas as palavras aparecem.
-  // - Nenhum ou mais de um compatível → ERRO (não posta com produto errado).
-  function matchProduct(rows, query, listChanged) {
-    const q = tokens(query);
-    const isId = /^\d{6,}$/.test(String(query).trim());
-    const list = rows.slice(0, 5).map((r) => `"${r.text.slice(0, 60)}"`).join(', ');
-    let m;
-    if (isId) {
-      const id = String(query).trim();
-      m = rows.filter((r) => tokens(r.text).includes(id) || new RegExp(`(^|[^0-9])${id}([^0-9]|$)`).test(r.html));
-      if (!m.length && rows.length === 1 && listChanged) m = rows;
-    } else {
-      const phrase = ` ${q.join(' ')} `;
-      m = rows.filter((r) => ` ${tokens(r.text).join(' ')} `.includes(phrase));
-      if (!m.length) m = rows.filter((r) => { const t = new Set(tokens(r.text)); return q.every((w) => t.has(w)); });
+  const hasId = (r, id) => tokens(r.text).includes(id) || new RegExp(`(^|[^0-9])${id}([^0-9]|$)`).test(r.html);
+
+  // Escolhe o item certo da lista. Regras (palavras inteiras, números incluídos):
+  // - Se o ID do produto aparece em algum item (texto ou atributos) → esse item.
+  // - Busca pelo ID que devolveu um único item, diferente da lista de antes → esse item.
+  // - Busca pelo nome: a sequência de palavras aparece no item (ou todas as palavras).
+  //   Se a página mostra IDs e o item achado tem outro ID → recusa.
+  // - Nenhum ou mais de um compatível → ERRO (nunca posta com produto errado).
+  function matchProduct(rows, attempt, productId, listChanged) {
+    const list = rows.slice(0, 5).map((r) => `"${r.text.slice(0, 60)}"`).join(', ') || 'nenhum';
+    if (productId) {
+      const byId = rows.filter((r) => hasId(r, productId));
+      if (byId.length) return byId[0];
     }
-    if (!m.length) throw new Error(`nenhum produto da busca corresponde a "${query}" — não vinculei nada para não errar o link. Resultados vistos: ${list}`);
+    if (attempt.kind === 'id') {
+      if (rows.length === 1 && listChanged) return rows[0];
+      throw new Error(`busca pelo ID ${attempt.q}: ${rows.length ? `${rows.length} resultados sem o ID visível (${list})` : 'nenhum resultado'}`);
+    }
+    const q = tokens(attempt.q);
+    const phrase = ` ${q.join(' ')} `;
+    let m = rows.filter((r) => ` ${tokens(r.text).join(' ')} `.includes(phrase));
+    if (!m.length) m = rows.filter((r) => { const t = new Set(tokens(r.text)); return q.every((w) => t.has(w)); });
     if (m.length > 1) {
       const exact = m.filter((r) => tokens(r.text).slice(0, q.length).join(' ') === q.join(' '));
-      if (exact.length === 1) return exact[0];
-      throw new Error(`a busca "${query}" encontrou ${m.length} produtos parecidos — use o ID do produto para garantir o link certo. Resultados: ${list}`);
+      if (exact.length === 1) m = exact;
+    }
+    if (!m.length) throw new Error(`busca pelo nome "${attempt.q}": nenhum produto corresponde. Resultados vistos: ${list}`);
+    if (m.length > 1) throw new Error(`busca pelo nome "${attempt.q}": ${m.length} produtos parecidos — cole o link do produto para garantir o certo. Resultados: ${list}`);
+    if (productId && rows.some((r) => /\d{12,}/.test(r.html)) && !hasId(m[0], productId) && /\d{12,}/.test(m[0].html)) {
+      throw new Error(`busca pelo nome "${attempt.q}": o produto encontrado tem outro ID (esperado ${productId})`);
     }
     return m[0];
   }
 
-  async function linkProduct(query, label) {
-    const addBtn = await waitFor(() => findByText(L.addLink)[0], { timeout: 20000, what: 'botão "Adicionar link"' });
-    await click(addBtn);
-    let dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de adicionar link' });
-    await human(800, 1400);
-
-    // Escolher o tipo "Produtos" (pode ser um seletor, uma aba ou já vir selecionado)
-    const opt = findByText(L.productsOption, { within: dlg, exact: true })[0];
-    if (opt) { await click(opt); await human(); }
-    const next1 = findByText(L.next, { within: topDialog() || dlg, exact: true }).map(clickable).find((b) => !disabled(b));
-    if (next1) { await click(next1); await human(1200, 2000); }
-
-    dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de produtos' });
-    const search = await waitFor(() => [...dlg.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].find(visible), { timeout: 20000, what: 'campo de busca de produto' });
-    await human(800, 1500);
+  // Digita a busca e espera a lista mudar e ficar estável.
+  async function searchProducts(search, query) {
     const before = signature(readResults(topDialog()));
+    setInputValue(search, '');
+    await sleep(200);
     setInputValue(search, query);
     await sleep(300);
     key(search, 'Enter', 'Enter', 13);
-
-    // Espera a lista mudar (resultado da busca) e ficar estável
     let rows = null;
     let stable = 0;
     let prevSig = null;
@@ -400,8 +393,44 @@
       rows = cur;
       if (rows && stable >= 2) break;
     }
-    if (!rows) throw new Error(`a busca "${query}" não mostrou nenhum produto (confira se o produto está na sua vitrine de afiliado)`);
-    const chosen = matchProduct(rows, query, listChanged);
+    return { rows: rows || [], listChanged };
+  }
+
+  async function linkProduct(job) {
+    const label = job.productLabel;
+    const addBtn = await waitFor(() => findByText(L.addLink)[0], { timeout: 20000, what: 'botão "Adicionar link"' });
+    await click(addBtn);
+    let dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de adicionar link' });
+    await human(800, 1400);
+
+    // Escolher o tipo "Produtos" (pode ser um seletor, uma aba ou já vir selecionado)
+    const opt = findByText(L.productsOption, { within: dlg, exact: true })[0];
+    if (opt) { await click(opt); await human(); }
+    const next1 = findByText(L.next, { within: topDialog() || dlg, exact: true }).map(clickable).find((b) => !disabled(b));
+    if (next1) { await click(next1); await human(1200, 2000); }
+
+    dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de produtos' });
+    const search = await waitFor(() => [...dlg.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].find(visible), { timeout: 20000, what: 'campo de busca de produto' });
+    await human(800, 1500);
+
+    // 1º tenta pelo ID (do link); se não der, pelo nome do produto
+    const attempts = [];
+    if (job.productId) attempts.push({ q: job.productId, kind: 'id' });
+    if (job.productQuery) attempts.push({ q: job.productQuery, kind: 'name' });
+    let chosen = null;
+    const errors = [];
+    for (const a of attempts) {
+      const { rows, listChanged } = await searchProducts(search, a.q);
+      try {
+        chosen = matchProduct(rows, a, job.productId, listChanged);
+        stepLog.push(`✓ produto encontrado pela busca ${a.kind === 'id' ? 'do ID' : 'do nome'}`);
+        break;
+      } catch (e) {
+        errors.push(e.message);
+        stepLog.push('• ' + e.message);
+      }
+    }
+    if (!chosen) throw new Error(`não vinculei nenhum produto para não errar o link — ${errors.join(' | ')}. Confira se o produto está na sua vitrine de afiliado.`);
     linkedProduct = chosen.text.slice(0, 160);
     stepLog.push(`✓ produto escolhido: ${linkedProduct}`);
     await click(chosen.el.matches('input') ? (chosen.el.closest('label') || chosen.el) : chosen.el);
@@ -434,7 +463,7 @@
 
     // Confere o produto anexado fora do campo de legenda
     const ed = findCaptionEditor();
-    const marks = [label, query].filter(Boolean);
+    const marks = [label, job.productQuery, job.productId].filter(Boolean);
     const appears = (m) => {
       const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       let n;
@@ -541,6 +570,14 @@
     return L.success.some((w) => { const n = norm(w); return body.includes(n) && !beforeText.includes(n); });
   }
 
+  // Página de login no lugar do TikTok Studio = sessão caiu.
+  function isLoggedOut() {
+    if (/\/login|\/signup/i.test(location.pathname)) return true;
+    if (findFileInput() || findCaptionEditor()) return false;
+    const body = norm(document.body?.innerText);
+    return /(entrar no tiktok|fazer login|faca login|log in to tiktok|sign up for tiktok|usar telefone \/ e-mail|use phone \/ email)/.test(body);
+  }
+
   async function runJob(job) {
     JOB = job;
     L = job.labels || {};
@@ -556,7 +593,7 @@
       await step('Escrevendo a legenda', () => writeCaption(job.caption));
       await step('Aguardando o envio terminar', () => waitUploadDone());
       await dismissPopups();
-      if (job.productQuery) await step('Vinculando o produto (carrinho)', () => linkProduct(job.productQuery, job.productLabel));
+      if (job.linkProduct && (job.productId || job.productQuery)) await step('Vinculando o produto (carrinho)', () => linkProduct(job));
       if (job.brandedContent) await step('Marcando "Conteúdo de marca"', () => markBrandedContent());
       await dismissPopups();
       if (job.dryRun) {
@@ -567,7 +604,7 @@
       report('job-result', { jobId: job.id, ok: true, step: 'Publicado', url: location.href, log: stepLog, linkedProduct });
     } catch (e) {
       if (aborted) return;
-      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: stepLog, linkedProduct, clickedPublish });
+      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: stepLog, linkedProduct, clickedPublish, loggedOut: !clickedPublish && isLoggedOut() });
     }
   }
 

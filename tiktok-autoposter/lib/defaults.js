@@ -42,6 +42,13 @@ export const DEFAULT_SETTINGS = {
   closeTabAfter: true,          // fechar a aba depois de postar
   maxRetries: 1,                // novas tentativas do mesmo vídeo em caso de falha
   pauseAfterFailures: 3,        // pausa tudo após N falhas seguidas
+  keepAwake: true,              // impedir o computador de suspender enquanto estiver rodando
+  telegramEnabled: false,       // avisos no celular pelo Telegram
+  telegramToken: '',
+  telegramChatId: '',
+  telegramEachPost: false,      // avisar a cada post publicado
+  telegramSummary: true,        // resumo diário
+  telegramSummaryHour: 22,
   uploadUrl: UPLOAD_URL,
   labels: DEFAULT_LABELS,
 };

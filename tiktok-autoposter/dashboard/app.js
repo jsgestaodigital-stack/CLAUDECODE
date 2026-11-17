@@ -1,7 +1,8 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS } from '../lib/defaults.js';
-import { previewQueue, countPostedToday, isLinkReady, productBlocked } from '../lib/scheduler.js';
+import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey } from '../lib/scheduler.js';
 import { previewSeries, NICHES } from '../lib/captions.js';
 import { getRootHandle, saveRootHandle, permissionState } from '../lib/fsaccess.js';
+import { resolveProductLink, extractProductId } from '../lib/productlink.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -172,6 +173,8 @@ function renderBanner() {
   let html = '';
   if (folderName && folderPerm !== 'granted') {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>O Chrome precisa de permissão para ler a pasta “${esc(folderName)}”</b><span class="muted small">Sem isso as postagens param. Clique em Reautorizar e, se aparecer, escolha “Permitir em todas as visitas”.</span></div><button class="btn primary small" data-act="reauth">Reautorizar pasta</button></div>`;
+  } else if (!S.runtime.running && S.runtime.pausedReason === 'logged-out') {
+    html = `<div class="banner err">${icon('lock')}<div class="grow"><b>Pausado: o TikTok está deslogado neste Chrome</b><span class="muted small">Entre na sua conta do TikTok e depois clique em Iniciar.</span></div><a class="btn small" href="https://www.tiktok.com/login" target="_blank" rel="noopener">Entrar no TikTok</a></div>`;
   } else if (!S.runtime.running && S.runtime.consecutiveFailures >= (S.settings.pauseAfterFailures || 3)) {
     html = `<div class="banner err">${icon('alert')}<div class="grow"><b>Pausado após ${S.runtime.consecutiveFailures} falhas seguidas</b><span class="muted small">Veja o motivo no Histórico, faça um teste e depois clique em Iniciar.</span></div><button class="btn small" data-goto="history">Ver histórico</button></div>`;
   } else if (Object.values(S.videos).some((v) => v.status === 'unconfirmed')) {
@@ -300,14 +303,14 @@ function renderProducts() {
     else if (!ready) badge = `<span class="pill warn">${icon('alert')}Falta o link</span>`;
     else if (!c('pending')) badge = '<span class="pill">Sem vídeos novos</span>';
     else badge = '<span class="pill ok">Na fila</span>';
-    const tested = p.linkTestedAt && p.linkTestedQuery === p.productQuery;
+    const tested = p.linkTestedAt && p.linkTestedKey === linkKey(p);
     const niche = NICHES[p.niche]?.name || NICHES.geral.name;
     return `<div class="product ${off ? 'off' : ''} ${!ready && !off ? 'needs' : ''}">
       <div class="top"><div style="min-width:0"><h3>${esc(p.displayName)}</h3><div class="folder-name">📁 ${esc(p.folder)}</div></div>${badge}</div>
       <div class="bar" title="${pct}% publicado"><i style="width:${pct}%"></i></div>
       <div class="counts"><div><b>${c('pending')}</b>pendentes</div><div><b>${c('posted')}</b>publicados</div><div><b>${c('failed')}</b>falhas</div></div>
       <div class="linkbox">
-        <div class="row">${icon('cart')}${ready ? `Busca: <b>${esc(p.productQuery)}</b>` : '<span style="color:var(--yellow)">Link não configurado</span>'}</div>
+        ${ready ? (p.productId ? `<div class="row">${icon('cart')}ID <b>${esc(p.productId)}</b></div>` : '') + (p.productQuery ? `<div class="row">${icon('text')}<span>Nome: <b>${esc(p.productQuery)}</b></span></div>` : '') + (!p.productId ? `<div class="row small" style="color:var(--yellow)">${icon('alert')}Sem link: só busca pelo nome</div>` : '') : `<div class="row">${icon('cart')}<span style="color:var(--yellow)">Link não configurado</span></div>`}
         ${ready ? `<div class="row">${icon('shield')}${tested ? `<span style="color:var(--green)">Link conferido ${fmtWhen(p.linkTestedAt)}</span>` : '<span class="muted">Ainda não testado — faça um teste</span>'}</div>` : ''}
         ${tested && p.linkTestedMatch ? `<div class="row muted small" title="${esc(p.linkTestedMatch)}">↳ ${esc(p.linkTestedMatch.slice(0, 60))}</div>` : ''}
         <div class="row">${icon('hash')}${esc(niche)}${p.hashtags?.trim() ? ' + hashtags próprias' : ''}</div>
@@ -381,7 +384,12 @@ function fillSettings() {
   f.activeStartHour.innerHTML = hours(0, 23);
   f.activeEndHour.innerHTML = hours(1, 24);
   for (const k of ['jitterMinutes', 'maxPerDay', 'hashtagsCount', 'activeStartHour', 'activeEndHour', 'videoOrder', 'onExhausted', 'maxRetries', 'pauseAfterFailures', 'uploadUrl']) f[k].value = s[k];
-  for (const k of ['linkProduct', 'brandedContent', 'foregroundTab', 'closeTabAfter']) f[k].checked = !!s[k];
+  for (const k of ['linkProduct', 'brandedContent', 'foregroundTab', 'closeTabAfter', 'keepAwake', 'telegramEnabled', 'telegramEachPost', 'telegramSummary']) f[k].checked = !!s[k];
+  f.telegramSummaryHour.innerHTML = hours(0, 23);
+  f.telegramSummaryHour.value = s.telegramSummaryHour ?? 22;
+  f.telegramToken.value = s.telegramToken || '';
+  f.telegramChatId.value = s.telegramChatId || '';
+  $('#tgFields').hidden = !s.telegramEnabled;
   f.labels.value = JSON.stringify(s.labels, null, 2);
   setIntervalSeg(s.intervalMinutes);
   settingsDirty = false;
@@ -416,6 +424,13 @@ async function saveSettings(e) {
     uploadUrl: /^https:\/\/www\.tiktok\.com\//.test(f.uploadUrl.value.trim()) ? f.uploadUrl.value.trim() : d.uploadUrl,
     linkProduct: f.linkProduct.checked, brandedContent: f.brandedContent.checked,
     foregroundTab: f.foregroundTab.checked, closeTabAfter: f.closeTabAfter.checked,
+    keepAwake: f.keepAwake.checked,
+    telegramEnabled: f.telegramEnabled.checked,
+    telegramToken: f.telegramToken.value.trim(),
+    telegramChatId: f.telegramChatId.value.trim(),
+    telegramEachPost: f.telegramEachPost.checked,
+    telegramSummary: f.telegramSummary.checked,
+    telegramSummaryHour: clamp(Number(f.telegramSummaryHour.value), 0, 23, 22),
     labels: { ...DEFAULT_LABELS, ...labels },
   };
   const reschedule = settings.intervalMinutes !== S.settings.intervalMinutes;
@@ -429,6 +444,7 @@ async function saveSettings(e) {
 
 // ---------- produto ----------
 let editing = null;
+let linkCheck = 0; // evita que uma checagem antiga sobrescreva a mais nova
 function openProduct(folder) {
   const p = S.products[folder];
   if (!p) return;
@@ -437,18 +453,23 @@ function openProduct(folder) {
   $('#pdTitle').textContent = p.displayName;
   $('#pdFolder').textContent = `📁 ${p.folder}`;
   $('#pdNiche').innerHTML = Object.entries(NICHES).map(([k, n]) => `<option value="${k}">${esc(n.name)}</option>`).join('');
-  for (const k of ['displayName', 'productQuery', 'productLabel', 'captions', 'hashtags', 'benefits']) f[k].value = p[k] || '';
+  for (const k of ['displayName', 'productUrl', 'productId', 'productQuery', 'productLabel', 'captions', 'hashtags', 'benefits']) f[k].value = p[k] || '';
+  // produtos antigos guardavam o ID no campo de busca
+  if (!p.productUrl && !p.productId && /^\d{6,}$/.test(p.productQuery || '')) { f.productUrl.value = p.productQuery; f.productId.value = p.productQuery; f.productQuery.value = ''; }
   f.niche.value = NICHES[p.niche] ? p.niche : 'geral';
   f.enabled.checked = p.enabled !== false;
+  showLinkStatus();
   updateProductHints();
   renderPreview();
   $('#productDlg').showModal();
-  setTimeout(() => (p.productQuery ? f.displayName : f.productQuery).focus(), 50);
+  setTimeout(() => (f.productUrl.value ? f.displayName : f.productUrl).focus(), 50);
 }
 function formProduct() {
   const f = $('#productForm');
   return {
     displayName: f.displayName.value.trim() || S.products[editing]?.displayName || '',
+    productUrl: f.productUrl.value.trim(),
+    productId: f.productId.value.trim(),
     productQuery: f.productQuery.value.trim(),
     productLabel: f.productLabel.value.trim().slice(0, 30),
     niche: f.niche.value,
@@ -458,14 +479,39 @@ function formProduct() {
     enabled: f.enabled.checked,
   };
 }
-function updateProductHints() {
+function setLinkStatus(text, color) {
+  const el = $('#pdLinkStatus');
+  el.textContent = text;
+  el.style.color = color || '';
+}
+function showLinkStatus() {
   const f = $('#productForm');
-  const q = f.productQuery.value.trim();
-  const hint = $('#pdQueryHint');
-  if (!q) { hint.textContent = 'Obrigatório para postar com o carrinho.'; hint.style.color = 'var(--yellow)'; }
-  else if (/^\d{6,}$/.test(q)) { hint.textContent = '✓ ID do produto — o jeito mais seguro.'; hint.style.color = 'var(--green)'; }
-  else { hint.textContent = 'Nome: precisa corresponder a um único produto na busca. Se houver parecidos, use o ID.'; hint.style.color = ''; }
-  $('#pdLabelCount').textContent = f.productLabel.value.length;
+  const id = f.productId.value.trim();
+  const url = f.productUrl.value.trim();
+  if (id) setLinkStatus(`✓ ID do produto: ${id}`, 'var(--green)');
+  else if (url) setLinkStatus('Verificando o link…', 'var(--muted)');
+  else if (f.productQuery.value.trim()) setLinkStatus('Sem link: a busca será só pelo nome (menos seguro). Cole o link para garantir.', 'var(--yellow)');
+  else setLinkStatus('Obrigatório para postar com o carrinho.', 'var(--yellow)');
+}
+// Lê o ID do link colado (links curtos são abertos para descobrir o destino).
+async function checkLink() {
+  const f = $('#productForm');
+  const url = f.productUrl.value.trim();
+  const my = ++linkCheck;
+  if (!url) { f.productId.value = ''; showLinkStatus(); return; }
+  const quick = extractProductId(url);
+  if (quick) { f.productId.value = quick; showLinkStatus(); return quick; }
+  f.productId.value = '';
+  setLinkStatus('Abrindo o link para achar o ID do produto…', 'var(--muted)');
+  const r = await resolveProductLink(url);
+  if (my !== linkCheck) return;
+  if (r.id) { f.productId.value = r.id; showLinkStatus(); return r.id; }
+  setLinkStatus('✗ ' + r.error, 'var(--red)');
+  return null;
+}
+let linkTimer;
+function updateProductHints() {
+  $('#pdLabelCount').textContent = $('#productForm').productLabel.value.length;
 }
 function renderPreview() {
   if (!editing) return;
@@ -597,6 +643,40 @@ $('#btnRequeueFailed').onclick = async () => {
 };
 $('#settingsForm').addEventListener('submit', saveSettings);
 $('#settingsForm').addEventListener('input', () => { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; });
+$('#settingsForm').telegramEnabled.addEventListener('change', (e) => { $('#tgFields').hidden = !e.target.checked; });
+$('#btnTgFind').onclick = async () => {
+  const f = $('#settingsForm');
+  const r = await send('telegram-find-chat', { token: f.telegramToken.value });
+  if (r.ok) { f.telegramChatId.value = r.chatId; settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; toast(`Chat encontrado${r.name ? ': ' + r.name : ''} ✓ — clique em Salvar`); }
+};
+$('#btnTgTest').onclick = async () => {
+  const f = $('#settingsForm');
+  const r = await send('telegram-test', { token: f.telegramToken.value, chatId: f.telegramChatId.value });
+  if (r.ok) toast('Mensagem enviada ✓ — confira no Telegram');
+};
+$('#btnExport').onclick = async () => {
+  const r = await send('export');
+  if (!r.ok) return;
+  const blob = new Blob([JSON.stringify(r.data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `autoposter-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast('Backup exportado ✓');
+};
+$('#btnImport').onclick = () => $('#importFile').click();
+$('#importFile').onchange = async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let data;
+  try { data = JSON.parse(await file.text()); } catch (_) { toast('Arquivo inválido.', true); return; }
+  if (!confirm('Importar este backup? Produtos e configurações atuais serão substituídos e o AutoPoster ficará pausado.')) return;
+  const r = await send('import', { data });
+  if (r.ok) toast(`Backup importado: ${r.products} produtos ✓`);
+};
 $('#btnInspect').onclick = async () => {
   const r = await send('inspect');
   const out = $('#inspectOut');
@@ -608,15 +688,22 @@ $('#queueSearch').oninput = (e) => { ui.queueSearch = e.target.value; renderQueu
 
 $('#productForm').addEventListener('input', (e) => {
   updateProductHints();
+  if (e.target.name === 'productUrl') { clearTimeout(linkTimer); linkTimer = setTimeout(checkLink, 450); return; }
+  if (e.target.name === 'productQuery' && !$('#productForm').productId.value) showLinkStatus();
   if (!['productQuery', 'productLabel'].includes(e.target.name)) renderPreview();
 });
 $('#productForm').addEventListener('change', (e) => { if (e.target.name === 'niche') renderPreview(); });
 $('#pdRegen').onclick = () => renderPreview();
 $('#productDlg').addEventListener('close', async () => {
   if ($('#productDlg').returnValue === 'save' && editing) {
+    if ($('#productForm').productUrl.value.trim() && !$('#productForm').productId.value.trim()) await checkLink();
     const data = formProduct();
+    if (data.productUrl && !data.productId) {
+      toast('Não consegui achar o ID nesse link. Confira o link (ou cole o ID) e salve de novo.', true);
+      if (!data.productQuery) data.productUrl = '';
+    }
     const r = await send('save-product', { folder: editing, data });
-    if (r.ok) toast(data.productQuery ? 'Produto salvo ✓ — faça um teste para conferir o link' : 'Produto salvo, mas sem link ele não entra na fila', !data.productQuery);
+    if (r.ok && (data.productId || !data.productUrl)) toast(data.productId || data.productQuery ? 'Produto salvo ✓ — faça um teste para conferir o link' : 'Produto salvo, mas sem link ele não entra na fila', !(data.productId || data.productQuery));
   }
   editing = null;
 });
