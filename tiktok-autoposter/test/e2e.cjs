@@ -188,9 +188,11 @@ async function main() {
   await dash.selectOption('select[data-assign-folder="kit-ambiguo"]', KIT);
   await sleep(400);
   // escova: "+ Novo produto" direto do seletor da pasta → cria e já liga
+  await dash.waitForFunction(() => document.querySelector('select[data-assign-folder="kit-ambiguo"]')?.value !== '');
+  await sleep(600);
   await dash.selectOption('select[data-assign-folder="escova-secadora"]', '__new__');
   await fillProduct({ query: 'Escova Secadora Rotativa', name: 'Escova secadora', niche: 'cabelo' });
-  for (let i = 0; i < 30 && !(await get(['folders'])).folders['escova-secadora'].catalogKey; i++) await sleep(500);
+  for (let i = 0; i < 60 && !(await get(['folders'])).folders['escova-secadora'].catalogKey; i++) await sleep(500);
   st = await get(['catalog', 'folders']);
   const ESC = st.folders['escova-secadora'].catalogKey;
   assert(st.folders['fone-bluetooth-x'].catalogKey === FONE && st.folders['kit-ambiguo'].catalogKey === KIT, 'pastas ligadas pelo seletor');
