@@ -5,62 +5,118 @@
 <title>TikTok Studio (simulação para testes)</title>
 <style>
   body { font-family: sans-serif; padding: 20px; }
-  [role=dialog] { position: fixed; inset: 60px; background: #fff; border: 2px solid #333; padding: 20px; }
+  [role=dialog] { position: fixed; inset: 40px; background: #fff; border: 2px solid #333; padding: 20px; overflow: auto; }
   [hidden] { display: none !important; }
   .public-DraftEditor-content { border: 1px solid #999; min-height: 60px; padding: 6px; white-space: pre-wrap; }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; }
+  .menu { border: 1px solid #ccc; padding: 6px; }
+  .pagination button { min-width: 28px; }
 </style>
 </head>
 <body>
-<!-- Simulação simplificada da página de upload do TikTok Studio, só para testes automatizados. -->
+<!-- Simulação da página de upload do TikTok Studio (pt-BR), baseada em capturas de tela reais.
+     Só para testes automatizados. -->
 <div id="start">
   <p>Selecione o vídeo para enviar</p>
   <input type="file" accept="video/*" id="file">
 </div>
-<div id="draftModal" role="dialog" hidden>
-  <p>Continuar editando o rascunho?</p><button id="discard">Descartar</button>
+<div id="draftModal" hidden>
+  <span>⚠</span> <span>Um vídeo que estavas a editar não foi guardado. Continuar a editar?</span>
+  <button id="discard">Eliminar</button> <button id="keepDraft">Continuar</button>
 </div>
 <div id="editor" hidden>
   <div id="status"><span id="pct">0%</span></div>
   <p>Descrição</p>
   <div class="DraftEditor-root"><div class="public-DraftEditor-content" contenteditable="true" id="cap"></div></div>
-  <div><span>Adicionar link</span> <button id="addLink">Adicionar link</button></div>
+  <h4>Capa</h4>
+  <h4>Localização</h4>
+  <div class="link-section">
+    <div class="link-title"><span>Adicionar link</span> <span title="info">ⓘ</span></div>
+    <button id="addLink"><span>+</span> Adicionar</button>
+  </div>
   <div id="productCard"></div>
+  <h3>Definições</h3>
   <button id="more">Mostrar mais</button>
   <div id="advanced" hidden>
-    <div class="row"><span>Divulgar conteúdo do vídeo</span> <div role="switch" aria-checked="false" id="disc" tabindex="0"></div></div>
+    <p>Permitir aos utilizadores:</p>
+    <label><input type="checkbox" checked> <span>Comentário</span></label>
+    <label><input type="checkbox" checked> <span>Reutilização de conteúdo</span></label>
+    <div class="row"><span>Divulga o conteúdo da publicação</span> <div role="switch" aria-checked="false" id="disc" tabindex="0"></div></div>
+    <p>Diz aos outros que esta publicação promove uma marca, um produto ou um serviço.</p>
     <div id="discOpts" hidden>
-      <label><input type="checkbox" id="own"> <span>Sua marca</span></label>
+      <label><input type="checkbox" id="own"> <span>A tua marca</span></label>
       <label><input type="checkbox" id="branded"> <span>Conteúdo de marca</span></label>
     </div>
   </div>
   <button data-e2e="post_video_button" id="post" disabled>Publicar</button>
 </div>
+
+<!-- 1) Tipo de link -->
 <div id="m1" role="dialog" hidden>
   <h3>Adicionar link</h3>
-  <div role="option" id="optProducts">Produtos</div>
-  <button id="m1next" disabled>Próximo</button>
+  <p>Tipo de link</p>
+  <div role="combobox" id="linkType" tabindex="0"><span>🛍</span> <span>Produtos</span> <span>⌄</span></div>
+  <div class="menu" id="linkMenu" hidden><div role="option" id="optProducts"><span>🛍</span> <span>Produtos</span> <span>✓</span></div></div>
+  <button id="m1cancel">Cancelar</button>
+  <button id="m1next">Seguinte</button>
 </div>
+
+<!-- 2) Vitrine -->
 <div id="m2" role="dialog" hidden>
-  <h3>Adicionar produtos</h3>
-  <input type="text" placeholder="Pesquisar produtos" id="search">
-  <div id="results"></div>
-  <button id="m2next" disabled>Próximo</button>
+  <h3>‹ Adicionar links dos produtos</h3>
+  <div role="tab">Mostrar produtos</div>
+  <input type="text" placeholder="Pesquisar produtos" id="search"> <span>🔍</span>
+  <table>
+    <thead><tr><th></th><th>Nome do produto</th><th>ID do produto</th><th>Preço</th><th>Stock</th><th>Estado</th></tr></thead>
+    <tbody id="results"></tbody>
+  </table>
+  <p id="empty" hidden>Nenhum resultado encontrado</p>
+  <div class="pagination" id="pager"></div>
+  <button id="m2cancel">Cancelar</button>
+  <button id="m2next" disabled>Seguinte</button>
 </div>
+
+<!-- 3) Nome do link -->
 <div id="m3" role="dialog" hidden>
-  <h3>Nome do produto</h3>
+  <h3>Adicionar link do produto</h3>
+  <p>Nome do produto</p>
   <input type="text" maxlength="30" id="pname">
+  <button id="m3cancel">Cancelar</button>
   <button id="m3add">Adicionar</button>
 </div>
+
 <div id="confirm" role="dialog" hidden>
   <p>Continuar a publicar?</p><button id="postNow">Publicar agora</button>
 </div>
 <div id="done" hidden>Gerenciar seus posts — Vídeo publicado</div>
 <script>
   const $ = (id) => document.getElementById(id);
-  window.__result = { events: [] };
+  window.__result = { events: [], searches: [] };
   const R = window.__result;
   const Q = new URLSearchParams(location.search);
-  if (new URLSearchParams(location.search).has('draft')) $('draftModal').hidden = false;
+  const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+  // vitrine de afiliado (4 por página)
+  const SHOWCASE = [
+    ['Microfone Lapela Hollyland Lark A1 Combo Preto P/ iPhone e Android', '1734624264740242575', 'R$ 349,13', 2120, 'Ativo'],
+    ['DUNA Vestido Branco Boêmio, Sem Alças, Adequado para Férias', '1736199166294721746', 'R$ 107,60', 540, 'Ativo'],
+    ['Conjunto Feminino Pantalona com Top Peplum Assimétrico Elegante', '1736865129965782910', 'R$ 99,99', 224, 'Ativo'],
+    ['KIT 2 Softbox Luz contínua 50x70cm Soquete e27 - Kit completo', '1734439224228218855', 'R$ 82,04', 5645, 'Ativo'],
+    ['Lençol + 2 Fronhas Casal|Queen|King e Solteiro +10 cores', '1736378523664746282', 'R$ 18,10', 233200, 'Ativo'],
+    ['Fone Bluetooth X Pro Max Cancelamento de Ruído', '1729384756123', 'R$ 129,90', 310, 'Ativo'],
+    ['Kit Lençol Cama Solteiro Casal Queen King 400 fios Micropercal', '1733607714192197160', 'R$ 4,80', 0, 'Indisponível'],
+    ['Jogo de Lençol 3 Peças 400 Fios Micro Percal Solteiro Casal', '1734042014637787046', 'R$ 26,90', 0, 'Indisponível'],
+    ['Escova Secadora Rotativa 3 em 1 Modeladora', '1730000000000000001', 'R$ 89,90', 120, 'Ativo'],
+    ['Kit ambiguo azul', '1730000000000000002', 'R$ 19,90', 10, 'Ativo'],
+    ['Kit ambiguo rosa', '1730000000000000003', 'R$ 19,90', 10, 'Ativo'],
+    ['Garrafa Térmica Inox 1L Parede Dupla', '1739999999999999991', 'R$ 59,90', 87, 'Ativo'],
+  ];
+  let filtered = SHOWCASE;
+  let page = 1;
+  const PER = 4;
+
+  if (Q.has('draft')) $('draftModal').hidden = false;
   $('discard').onclick = () => { $('draftModal').hidden = true; R.events.push('draft-discarded'); };
   $('file').addEventListener('change', (e) => {
     const f = e.target.files[0];
@@ -83,43 +139,72 @@
     $('cap').textContent = (all ? '' : $('cap').textContent) + text;
     R.pastes = (R.pastes || 0) + 1;
     R.events.push(all ? 'paste-replace' : 'paste');
-    // modo "crash": imita a tela de erro do TikTok depois da legenda
     if (Q.has('crash') && $('cap').textContent.includes('#')) {
       setTimeout(() => { document.body.innerHTML = '<div style="text-align:center;padding:80px"><div style="font-size:80px">🤖</div><h2>Algo deu errado</h2><p>Tente novamente mais tarde.</p></div>'; }, 300);
     }
   });
   document.addEventListener('beforeinput', (e) => { if (e.target === $('cap')) R.events.push('beforeinput:' + e.inputType); }, true);
-  $('addLink').onclick = () => { $('m1').hidden = false; };
-  $('optProducts').onclick = () => { $('m1next').disabled = false; R.events.push('opt-products'); };
-  $('m1next').onclick = () => { $('m1').hidden = true; $('m2').hidden = false; };
-  $('search').addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    const q = $('search').value;
+
+  // 1) Tipo de link: "Produtos" já vem escolhido; o seletor abre um menu
+  $('addLink').onclick = () => { $('m1').hidden = false; R.events.push('add-link'); };
+  $('linkType').onclick = () => { $('linkMenu').hidden = !$('linkMenu').hidden; R.events.push('link-type-menu'); };
+  $('optProducts').onclick = () => { $('linkMenu').hidden = true; };
+  $('m1cancel').onclick = () => { $('m1').hidden = true; };
+  $('m1next').onclick = () => { $('m1').hidden = true; $('linkMenu').hidden = true; $('m2').hidden = false; filtered = SHOWCASE; page = 1; render(); };
+
+  // 2) Vitrine com busca (por nome; por ID só com ?idsearch) e paginação
+  function render() {
+    const rows = filtered.slice((page - 1) * PER, page * PER);
+    $('empty').hidden = rows.length > 0;
+    $('m2next').disabled = true;
+    const roleRadio = Q.has('roleradio');
+    $('results').innerHTML = rows.map(([name, id, price, stock, st]) => {
+      const dis = st !== 'Ativo' ? 'disabled' : '';
+      const ctrl = roleRadio
+        ? `<div role="radio" aria-checked="false" aria-disabled="${!!dis}" data-id="${id}"><input type="radio" name="p" value="${id}" style="display:none" ${dis}></div>`
+        : `<input type="radio" name="p" value="${id}" ${dis}>`;
+      return `<tr data-id="${id}"><td>${ctrl}</td><td><img alt="" width="20" height="20"> ${name}</td><td>${id}</td><td>${price}</td><td>${stock}</td><td>${st}</td></tr>`;
+    }).join('');
+    const pages = Math.max(1, Math.ceil(filtered.length / PER));
+    $('pager').innerHTML = `<button id="prev" ${page === 1 ? 'disabled' : ''}>‹</button>` +
+      Array.from({ length: pages }, (_, i) => `<button class="pg${i + 1 === page ? ' on' : ''}">${i + 1}</button>`).join('') +
+      `<button id="nextPage" aria-label="Próxima página" ${page === pages ? 'disabled' : ''}>›</button>`;
+    $('prev').onclick = () => { page--; render(); };
+    $('nextPage').onclick = () => { page++; R.pagesSeen = (R.pagesSeen || 1) + 1; render(); };
+    const pick = (id, rowEl) => { $('m2next').disabled = false; R.picked = id; R.pickedText = rowEl.textContent.replace(/\s+/g, ' ').trim(); };
+    $('results').querySelectorAll('input[type=radio]').forEach((r) => r.addEventListener('change', () => pick(r.value, r.closest('tr'))));
+    $('results').querySelectorAll('[role=radio]').forEach((d) => d.addEventListener('click', () => {
+      if (d.getAttribute('aria-disabled') === 'true') return;
+      $('results').querySelectorAll('[role=radio]').forEach((o) => o.setAttribute('aria-checked', 'false'));
+      d.setAttribute('aria-checked', 'true'); d.querySelector('input').checked = true;
+      pick(d.dataset.id, d.closest('tr'));
+    }));
+  }
+  function doSearch() {
+    const q = $('search').value.trim();
     R.searched = q;
+    R.searches.push(q);
     setTimeout(() => {
-      let rows;
-      if (q === 'ambiguo') rows = ['Kit ambiguo azul', 'Kit ambiguo rosa'];
-      else if (q === 'semresultado') rows = ['Produto aleatório A', 'Produto aleatório B'];
-      else if (Q.has('noidsearch') && (/^\d+$/.test(q) || /^https?:/.test(q))) rows = ['Produto aleatório A', 'Produto aleatório B'];
-      else rows = ['Outro produto qualquer', `${q} — Produto encontrado`, 'Mais um produto'];
-      R.searches = (R.searches || []).concat(q);
-      if (Q.has('roleradio')) {
-        // variante: cada item tem um <input> escondido + um [role=radio] visível
-        $('results').innerHTML = rows.map((t, i) => `<div class="row" role="radio" aria-checked="false" data-i="${i}"><input type="radio" name="p" value="${i}" style="display:none"><span>${t}</span> <span>R$ 49,90</span></div>`).join('');
-        $('results').querySelectorAll('[role=radio]').forEach((d) => d.addEventListener('click', () => {
-          $('results').querySelectorAll('[role=radio]').forEach((o) => o.setAttribute('aria-checked', 'false'));
-          d.setAttribute('aria-checked', 'true'); d.querySelector('input').checked = true;
-          $('m2next').disabled = false; R.picked = d.dataset.i; R.pickedText = d.textContent.trim();
-        }));
-        return;
-      }
-      $('results').innerHTML = rows.map((t, i) => `<div class="row"><label><input type="radio" name="p" value="${i}"> <span>${t}</span></label><span>R$ 49,90</span></div>`).join('');
-      $('results').querySelectorAll('input').forEach((r) => r.addEventListener('change', () => { $('m2next').disabled = false; R.picked = r.value; R.pickedText = r.parentElement.textContent.trim(); }));
-    }, 800);
-  });
-  $('m2next').onclick = () => { $('m2').hidden = true; $('m3').hidden = false; $('pname').value = 'Nome padrão'; };
-  $('m3add').onclick = () => { R.productLabel = $('pname').value; $('m3').hidden = true; $('productCard').textContent = '🛒 ' + R.productLabel; };
-  $('more').onclick = () => { $('advanced').hidden = false; };
+      const nq = norm(q);
+      filtered = !q ? SHOWCASE : SHOWCASE.filter(([name, id]) => norm(name).includes(nq) || (Q.has('idsearch') && id === q));
+      page = 1;
+      render();
+    }, 700);
+  }
+  $('search').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSearch(); });
+  $('m2cancel').onclick = () => { $('m2').hidden = true; R.events.push('showcase-cancel'); };
+  $('m2next').onclick = () => {
+    if ($('m2next').disabled) return;
+    const item = SHOWCASE.find((x) => x[1] === R.picked);
+    $('m2').hidden = true; $('m3').hidden = false; $('pname').value = item[0].slice(0, 30);
+  };
+
+  // 3) Nome do link (até 30) + Adicionar
+  $('m3cancel').onclick = () => { $('m3').hidden = true; };
+  $('m3add').onclick = () => { R.productLabel = $('pname').value; R.linkedId = R.picked; $('m3').hidden = true; $('productCard').textContent = '🛒 ' + R.productLabel; };
+
+  $('keepDraft').onclick = () => { R.events.push('draft-kept'); };
+  $('more').onclick = () => { $('advanced').hidden = false; $('more').textContent = 'Mostrar menos'; };
   $('disc').onclick = () => {
     const on = $('disc').getAttribute('aria-checked') !== 'true';
     $('disc').setAttribute('aria-checked', String(on));

@@ -39,25 +39,27 @@ Videos TikTok\
 - Para usar o **Google Drive**, instale o *Google Drive para computador* e escolha a pasta sincronizada (ex.: `G:\Meu Drive\Videos TikTok`). Os arquivos precisam estar disponíveis off-line (botão direito → *Disponibilizar off-line*).
 - Vídeos novos colocados na pasta entram na fila automaticamente a cada post.
 
-## Produtos: cadastre uma vez, use sempre
+## Produtos: importe a sua vitrine
 
-A tela **Produtos** é o seu **catálogo**:
+O produto precisa estar na sua **vitrine de afiliado** do TikTok Shop, que é a lista que aparece em *Adicionar link → Produtos → Seguinte*. A tela **Produtos** da extensão é o seu **catálogo**:
 
-- **Adicionar produto:** copie o link do produto no TikTok Shop (**Ctrl+C**) e cole no campo (**Ctrl+V**). Serve o link completo (`…/view/product/1729…`) ou o link curto de compartilhar (`vt.tiktok.com/…`).
-  - A extensão mostra na hora o **ID** e tenta preencher o **nome** sozinha.
-  - O resto é opcional: nicho das hashtags, benefícios, hashtags próprias e nome no carrinho (até 30 caracteres).
-  - Uma **prévia de 3 posts seguidos** mostra como as legendas vão variar.
-- **Editar, Pausar, Testar e Remover** ficam no cartão de cada produto. Colar o mesmo link duas vezes não duplica o produto.
-- Na tela **Vídeos → Pastas → produto**, escolha no seletor qual produto do catálogo cada pasta usa. A opção **“＋ Novo produto (colar link)”** cria o produto e já liga a pasta a ele.
-- Um **vídeo específico** pode usar outro produto: troque no seletor da linha do vídeo. *“Igual à pasta”* volta ao produto da pasta.
-- Ao remover um produto, as pastas e vídeos que o usavam ficam **sem produto** e não são postados até você escolher outro.
+- **Importar da minha vitrine** (recomendado):
+  - A extensão abre o TikTok Studio e carrega um vídeo da sua pasta, só para abrir o formulário.
+  - Ela lê **todas as páginas** da vitrine: nome, **ID do produto**, preço, estoque e situação (Ativo/Indisponível).
+  - Depois fecha **sem publicar nada**.
+  - Os produtos entram no catálogo com nome curto e nicho de hashtags já sugeridos.
+  - Importar de novo atualiza preço e situação **sem apagar** o que você configurou.
+- **Adicionar manualmente:** informe o **ID do produto**, que fica na coluna *ID do produto* da vitrine (ou cole o link), e a **palavra para buscar** na vitrine (ex.: “lençol”).
+- **Editar, Pausar, Testar e Remover** ficam no cartão de cada produto.
+- Na tela **Vídeos → Pastas → produto**, escolha no seletor qual produto cada pasta usa. Um **vídeo específico** pode usar outro produto.
+- **Produto Indisponível** (sem estoque): a extensão **não posta** com ele, mantém os vídeos na fila e avisa. Quando o estoque voltar, clique em **“Já voltou — reativar”** ou importe a vitrine de novo.
 
 ## Primeiro uso
 
 O painel abre no tema escuro e mostra a **configuração passo a passo**:
 
 1. **Escolher a pasta.** Quando o Chrome perguntar, permita e, se aparecer, escolha **“Permitir em todas as visitas”**.
-2. **Cadastrar produtos.** Cole os links (veja acima).
+2. **Cadastrar produtos.** Clique em **Importar da minha vitrine** (veja acima).
 3. **Ligar pastas aos produtos** na tela **Vídeos**.
 4. **Fazer um teste.** Faça login no TikTok Studio neste Chrome e clique em **Testar** no produto (ou em **Testar sem publicar** no topo).
    - A extensão preenche tudo e **não publica**; a aba fica aberta para você conferir.
@@ -66,18 +68,17 @@ O painel abre no tema escuro e mostra a **configuração passo a passo**:
 
 **Deixe o Chrome aberto** e configure o Windows para **não suspender** (Configurações → Sistema → Energia → Suspensão: *Nunca*).
 
-## Garantia do link certo
+## Garantia do produto certo
 
-- Um vídeo **só entra na fila** se tiver um produto do catálogo com link.
-- O **ID** vem do link que você colou; links curtos são abertos para descobrir o destino.
-- Na tela *Adicionar link → Produtos* do TikTok Studio (onde o TikTok obriga a escolher o produto numa lista), a extensão faz tudo sozinha:
-  1. cola o **link do produto** na busca;
-  2. se não der, busca pelo **ID**;
-  3. se não der, busca pelo **nome**.
-- Ela só escolhe o item que tem **esse ID**. Pelo nome, só aceita um item cujo nome bate por palavras inteiras e que não mostre outro ID.
-- O produto precisa estar na sua **vitrine de afiliado**.
-- Se **nada corresponder** ou houver **mais de um produto parecido**, ela **não publica** e avisa no Histórico, com a lista do que apareceu na tela.
-- Cada post registra no Histórico **qual produto foi vinculado**.
+- Um vídeo **só entra na fila** se tiver um produto do catálogo com ID (ou palavra de busca).
+- No TikTok Studio, a extensão faz o mesmo caminho que você:
+  1. clica em **+ Adicionar**, confere que o **Tipo de link** é *Produtos* e clica em **Seguinte**;
+  2. busca o produto na vitrine pelo **ID** e, se não achar, pela **palavra de busca**;
+  3. escolhe **somente a linha cujo “ID do produto” é o certo**. Se a busca não trouxer o produto, ela **folheia as páginas da vitrine** procurando o ID;
+  4. clica em **Seguinte**, confere o **Nome do produto** (até 30 caracteres) e clica em **Adicionar**.
+- Se nada corresponder ou houver dúvida, ela **não publica** e registra o que viu na tela.
+- Antes de enviar o vídeo, ela clica em **Eliminar** no aviso de rascunho antigo (“…não foi guardado. Continuar a editar?”).
+- Em **Mostrar mais**, ela liga **“Divulga o conteúdo da publicação”** e marca **“Conteúdo de marca”** (marca de terceiros), nunca “A tua marca”.
 
 ## Legendas e hashtags
 

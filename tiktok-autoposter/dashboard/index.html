@@ -127,8 +127,9 @@
     <!-- ============ PRODUTOS ============ -->
     <section class="view" id="view-products" hidden>
       <div class="toolbar">
-        <p class="hint grow" style="margin:0">Cadastre cada produto <b>uma vez</b> colando o link do TikTok Shop. Depois, na tela <b>Vídeos</b>, escolha o produto de cada pasta (ou de um vídeo específico).</p>
-        <button class="btn primary" id="btnNewProduct"><svg class="i"><use href="#i-cart"/></svg>Adicionar produto</button>
+        <p class="hint grow" style="margin:0"><b>Importe a sua vitrine de afiliado</b>: a extensão lê todos os produtos (nome, ID, preço e situação) direto do TikTok Studio, sem publicar nada. Depois, na tela <b>Vídeos</b>, escolha o produto de cada pasta.</p>
+        <button class="btn primary" id="btnSync"><svg class="i"><use href="#i-refresh"/></svg>Importar da minha vitrine</button>
+        <button class="btn" id="btnNewProduct"><svg class="i"><use href="#i-cart"/></svg>Adicionar manualmente</button>
       </div>
       <div class="products" id="productsGrid"></div>
     </section>
@@ -324,14 +325,14 @@
       <div class="dlg-body">
         <div class="dlg-sec">
           <h3><svg class="i"><use href="#i-cart"/></svg>Link do produto (carrinho laranja)</h3>
-          <div class="callout"><svg class="i"><use href="#i-info"/></svg><div>Cole o <b>link do produto</b> (do app ou do site, pode ser o link curto de compartilhar). A extensão tira o <b>ID</b> do link e, no TikTok Studio, só vincula o produto que tiver esse ID. Se a busca pelo ID não funcionar, ela tenta pelo <b>nome</b> e confere. Se nada bater certinho, ela <b>não posta</b> e avisa. O produto precisa estar na sua <b>vitrine de afiliado</b>.</div></div>
-          <label class="field"><span>Link do produto no TikTok Shop <span class="req">*</span></span>
-            <input name="productUrl" placeholder="https://www.tiktok.com/view/product/1729… ou https://vt.tiktok.com/…" autocomplete="off" spellcheck="false">
+          <div class="callout"><svg class="i"><use href="#i-info"/></svg><div>O produto precisa estar na sua <b>vitrine de afiliado</b>. No TikTok Studio a extensão busca pelo <b>nome</b> e escolhe a linha com o <b>ID do produto</b> certo. Se nada bater, ela <b>não posta</b> e avisa. O mais fácil é usar <b>Importar da minha vitrine</b>, que preenche tudo sozinho.</div></div>
+          <label class="field"><span>ID do produto (coluna “ID do produto” da vitrine) ou link <span class="req">*</span></span>
+            <input name="productUrl" placeholder="ex.: 1736378523664746282 — ou cole o link do produto" autocomplete="off" spellcheck="false">
             <small id="pdLinkStatus"></small>
           </label>
           <input type="hidden" name="productId">
           <div class="row2">
-            <label class="field"><span>Nome do produto como aparece no TikTok Shop</span><input name="productQuery" placeholder="ex.: Escova Secadora Rotativa 3 em 1" autocomplete="off"><small>Plano B para a busca. Copie o título do produto (ou o começo dele).</small></label>
+            <label class="field"><span>Palavra para buscar na vitrine</span><input name="productQuery" placeholder="ex.: lençol" autocomplete="off"><small>O que você digitaria na busca da vitrine para achar o produto.</small></label>
             <label class="field"><span>Nome no link do produto (até 30)</span><input name="productLabel" maxlength="30" autocomplete="off"><small><span id="pdLabelCount">0</span>/30 · texto que aparece no carrinho</small></label>
           </div>
         </div>

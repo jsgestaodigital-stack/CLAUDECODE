@@ -129,6 +129,36 @@ const CTAS = [
   'O link tá no carrinho, só tocar 🛒',
 ];
 
+// Palpite do nicho a partir do nome do produto (usado ao importar a vitrine; dá para trocar depois).
+const NICHE_WORDS = [
+  ['cabelo', /\b(escova secadora|secador|chapinha|prancha|babyliss|cabelo|capilar|shampoo|condicionador|mascara capilar)/],
+  ['beleza', /\b(maquiagem|batom|base|rimel|delineador|skincare|serum|hidratante|perfume|esmalte|unha|cilios|sobrancelha)/],
+  ['cozinha', /\b(panela|frigideira|air ?fryer|cozinha|talher|faca|liquidificador|cafeteira|pote|marmita|garrafa|copo|caneca)/],
+  ['casa', /\b(lencol|fronha|cama|edredom|cobertor|travesseiro|toalha|cortina|tapete|organizador|cabide|almofada|colcha|limpeza|vassoura|decor)/],
+  ['eletronicos', /\b(fone|microfone|lapela|softbox|ring ?light|tripe|camera|celular|carregador|cabo|smartwatch|relogio inteligente|caixa de som|bluetooth|led|luz|projetor|teclado|mouse)/],
+  ['moda', /\b(vestido|conjunto|blusa|camiseta|camisa|calca|saia|short|pantalona|jaqueta|casaco|biquini|maio|lingerie|pijama|tenis|sandalia|sapato|bota)/],
+  ['acessorios', /\b(colar|brinco|anel|pulseira|bolsa|carteira|oculos|bone|chapeu|relogio)/],
+  ['fitness', /\b(academia|treino|halter|elastico|yoga|whey|creatina|squeeze|fitness)/],
+  ['pet', /\b(pet|cachorro|gato|coleira|racao|caminha pet|arranhador)/],
+  ['infantil', /\b(bebe|infantil|crianca|brinquedo|mamadeira|fralda|chupeta)/],
+  ['auto', /\b(carro|moto|automotivo|volante|retrovisor|pneu)/],
+  ['saude', /\b(massageador|termometro|saude|bem estar|ortopedic|postura)/],
+];
+export function guessNiche(name) {
+  const n = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  for (const [niche, re] of NICHE_WORDS) if (re.test(n)) return niche;
+  return 'geral';
+}
+
+// Nome curto para legendas a partir do título longo da vitrine.
+export function shortProductName(name, max = 48) {
+  let s = String(name || '').replace(/\s+/g, ' ').trim();
+  s = s.split(/\s[-–|]\s|,|\||\s\+\s?\d/)[0].trim() || s;
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  return cut.slice(0, cut.lastIndexOf(' ') > 20 ? cut.lastIndexOf(' ') : max).trim();
+}
+
 // ---------- utilidades ----------
 export function spin(text, rand = Math.random) {
   let out = text;

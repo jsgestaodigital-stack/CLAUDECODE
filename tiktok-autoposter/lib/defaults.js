@@ -6,18 +6,22 @@ export const UPLOAD_URL = 'https://www.tiktok.com/tiktokstudio/upload?from=webap
 export const DEFAULT_LABELS = {
   addLink: ['adicionar link', 'add link', 'adicionar produto', 'add product', 'adicionar produtos', 'add products'],
   productsOption: ['produtos', 'products', 'produto', 'product', 'tiktok shop'],
-  next: ['proximo', 'avancar', 'next', 'continuar', 'continue'],
+  next: ['seguinte', 'proximo', 'avancar', 'next', 'continuar', 'continue'],
+  cancel: ['cancelar', 'cancel'],
+  noResults: ['nenhum resultado', 'sem resultados', 'nenhum produto', 'no results', 'no products', 'nao encontrado', 'not found', 'sem dados', 'no data'],
   add: ['adicionar', 'add', 'confirmar', 'confirm', 'salvar', 'save', 'concluir', 'done'],
   showMore: ['mostrar mais', 'show more', 'mais opcoes', 'more options', 'configuracoes avancadas', 'advanced settings', 'ver mais'],
   disclose: [
-    'divulgar conteudo do video', 'divulgar conteudo da publicacao', 'divulgacao de conteudo',
+    'divulga o conteudo da publicacao', 'divulga o conteudo', 'divulgar o conteudo da publicacao', 'divulgar conteudo do video', 'divulgar conteudo da publicacao', 'divulgacao de conteudo',
     'divulgar conteudo', 'disclose video content', 'disclose post content', 'content disclosure',
   ],
   brandedContent: ['conteudo de marca', 'branded content'],
   post: ['publicar', 'post'],
   confirmPost: ['publicar agora', 'post now', 'publicar mesmo assim', 'post anyway', 'continuar', 'continue'],
   dismiss: ['entendi', 'got it', 'agora nao', 'not now', 'ok', 'fechar', 'close', 'pular', 'skip'],
-  discardDraft: ['descartar', 'discard', 'nao, obrigado', 'no, thanks'],
+  discardDraft: ['eliminar', 'descartar', 'excluir', 'discard', 'delete', 'nao, obrigado', 'no, thanks'],
+  // faixa "Um vídeo que estavas a editar não foi guardado. Continuar a editar?"
+  draftBanner: ['nao foi guardado', 'nao foi salvo', 'continuar a editar', 'continuar editando', 'continue editing', 'was not saved', "wasn't saved"],
   uploading: ['enviando', 'carregando', 'uploading', 'processando', 'processing'],
   uploaded: ['enviado', 'carregado', 'uploaded', 'upload concluido', 'upload complete'],
   // mensagens da tela de erro do TikTok (a extensão para e registra quando uma delas aparece)
@@ -32,6 +36,17 @@ export const DEFAULT_LABELS = {
     'enviar outro video', 'upload another video', 'post publicado',
   ],
 };
+
+// Junta os textos padrão com os salvos pelo usuário (os novos padrões nunca somem por causa
+// de uma configuração antiga salva).
+export function mergeLabels(saved) {
+  const out = {};
+  for (const k of new Set([...Object.keys(DEFAULT_LABELS), ...Object.keys(saved || {})])) {
+    const own = Array.isArray(saved?.[k]) ? saved[k] : [];
+    out[k] = [...new Set([...(DEFAULT_LABELS[k] || []), ...own].map((x) => String(x).trim().toLowerCase()).filter(Boolean))];
+  }
+  return out;
+}
 
 export const DEFAULT_SETTINGS = {
   intervalMinutes: 60,          // 5, 10, 15, 20, 30 ou 60

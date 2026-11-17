@@ -72,6 +72,7 @@ export function isLinkReady(item) {
 
 export function productBlocked(item, settings) {
   if (!item || item.enabled === false) return true;
+  if (settings?.linkProduct !== false && item.unavailable) return true; // indisponível na vitrine (sem estoque)
   return settings?.linkProduct !== false && !isLinkReady(item);
 }
 

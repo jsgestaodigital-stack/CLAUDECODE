@@ -343,6 +343,31 @@
     }
   }
 
+  // Faixa de rascunho antigo ("…não foi guardado. Continuar a editar?" Eliminar | Continuar):
+  // elimina o rascunho para começar do zero.
+  async function discardOldDraft() {
+    const hint = findByText(L.draftBanner || []).find((el) => !el.closest('button, [role="button"]'));
+    if (!hint) return;
+    let node = hint.parentElement;
+    for (let i = 0; i < 5 && node && node !== document.body; i++) {
+      const btn = findByText(L.discardDraft, { within: node, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]'));
+      if (btn) {
+        logAct(`rascunho antigo encontrado ("${(hint.innerText || '').trim().slice(0, 90)}") → clicando em "${(btn.innerText || '').trim()}"`);
+        await click(btn);
+        await human(800, 1400);
+        // pode abrir uma confirmação
+        const d = topDialog();
+        if (d) {
+          const ok = findByText(L.discardDraft, { within: d, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]'));
+          if (ok) await click(ok);
+        }
+        return;
+      }
+      node = node.parentElement;
+    }
+    logAct('⚠ vi o aviso de rascunho antigo, mas não achei o botão para eliminar');
+  }
+
   async function uploadVideo(file) {
     const input = await waitFor(findFileInput, { timeout: 60000, what: 'campo de envio de vídeo' });
     logAct(`📤 enviando ${file.name} (${(file.size / 1e6).toFixed(1)} MB, ${file.type}) para ${describe(input)}`);
@@ -448,8 +473,11 @@
   }
 
   // ---------- produto (carrinho laranja) ----------
-  // Linha de um resultado: sobe a partir do controle até o bloco que contém só ele.
+  // Linha de um resultado: a linha da tabela (tr / role=row / li) que contém o controle;
+  // senão sobe a partir do controle até o bloco que contém só ele.
   function rowOf(ctrl, dlg) {
+    const tr = ctrl.closest('tr, [role="row"], li');
+    if (tr && dlg.contains(tr) && tr.querySelectorAll('input[type="radio"], input[type="checkbox"]').length <= 1) return tr;
     let node = ctrl.closest('label') || ctrl;
     let row = node;
     for (let i = 0; i < 6 && node && node !== dlg; i++) {
@@ -462,9 +490,22 @@
     return row;
   }
 
+  // Lê os dados de uma linha da vitrine: nome, ID, preço, estoque e situação.
+  function parseRow(text) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    const id = (t.match(/(?:^|\D)(\d{12,25})(?!\d)/) || [])[1] || null;
+    const name = (id ? t.slice(0, t.indexOf(id)) : t).trim().replace(/[\s|·-]+$/, '');
+    const price = (t.match(/R\$\s?[\d.]+,\d{2}/) || [])[0] || null;
+    const after = price ? t.slice(t.indexOf(price) + price.length) : '';
+    const stock = (after.match(/^\s*(\d[\d.]*)/) || [])[1] || null;
+    const nt = norm(t);
+    const status = /indisponivel|unavailable|esgotad|sold out|out of stock|inativ|inactive/.test(nt) ? 'indisponivel' : /\bativo\b|\bactive\b|disponivel/.test(nt) ? 'ativo' : null;
+    return { id, name, price, stock: stock ? Number(stock.replace(/\./g, '')) : null, status };
+  }
+
   function readResults(dlg) {
     if (!dlg || !dlg.isConnected) return null;
-    const ctrls = [...dlg.querySelectorAll(CONTROL)].filter(shown);
+    const ctrls = [...dlg.querySelectorAll('input[type="radio"], input[type="checkbox"], [role="radio"], [role="checkbox"]')].filter(shown);
     const rows = [];
     for (const c of ctrls) {
       const row = rowOf(c, dlg);
@@ -472,48 +513,48 @@
       if (rows.some((r) => r.row === row || r.row.contains(row) || row.contains(r.row))) continue;
       const text = (row.innerText || '').trim().replace(/\s+/g, ' ');
       if (!text) continue;
-      rows.push({ el: c, row, text, html: row.outerHTML.slice(0, 5000) });
+      const info = parseRow(text);
+      const blocked = disabled(c) || c.matches(':disabled') || !!c.querySelector?.('input:disabled');
+      rows.push({ el: c, row, text, html: row.outerHTML.slice(0, 5000), ...info, blocked });
     }
     return rows.length ? rows : null;
   }
   const signature = (rows) => (rows || []).map((r) => r.text).join('|');
+  const showsIds = (rows) => (rows || []).some((r) => r.id);
+  const emptyState = (dlg) => !!dlg && (L.noResults || []).some((w) => norm(dlg.innerText).includes(norm(w)));
 
-  const hasId = (r, id) => tokens(r.text).includes(id) || new RegExp(`(^|[^0-9])${id}([^0-9]|$)`).test(r.html);
+  const hasId = (r, id) => r.id === id || tokens(r.text).includes(id) || new RegExp(`(^|[^0-9])${id}([^0-9]|$)`).test(r.html);
 
-  // Escolhe o item certo da lista. Regras (palavras inteiras, números incluídos):
-  // - Se o ID do produto aparece em algum item (texto ou atributos) → esse item.
-  // - Busca pelo ID que devolveu um único item, diferente da lista de antes → esse item.
-  // - Busca pelo nome: a sequência de palavras aparece no item (ou todas as palavras).
-  //   Se a página mostra IDs e o item achado tem outro ID → recusa.
-  // - Nenhum ou mais de um compatível → ERRO (nunca posta com produto errado).
+  // Escolhe o item certo da lista. Regras:
+  // - Se o ID do produto aparece num item (a vitrine mostra a coluna "ID do produto") → esse item.
+  // - Se a lista mostra IDs e nenhum é o do produto → recusa (nunca escolhe outro produto).
+  // - Sem ID cadastrado: busca pelo nome; a sequência de palavras aparece no item (ou todas as palavras);
+  //   nenhum ou mais de um compatível → ERRO.
   function matchProduct(rows, attempt, productId, listChanged) {
-    const list = rows.slice(0, 5).map((r) => `"${r.text.slice(0, 60)}"`).join(', ') || 'nenhum';
+    const list = rows.slice(0, 5).map((r) => `"${r.text.slice(0, 70)}"`).join(', ') || 'nenhum';
     if (productId) {
       const byId = rows.filter((r) => hasId(r, productId));
       if (byId.length) return byId[0];
-    }
-    if (attempt.kind === 'id' || attempt.kind === 'link') {
-      if (rows.length === 1 && listChanged) return rows[0];
-      const what = attempt.kind === 'id' ? `busca pelo ID ${attempt.q}` : 'link colado na busca';
-      throw new Error(`${what}: ${rows.length ? `${rows.length} resultados sem o ID visível (${list})` : 'nenhum resultado'}`);
+      if (showsIds(rows)) throw new Error(`busca ${attempt.kind === 'id' ? 'pelo ID' : `por "${attempt.q}"`}: o ID ${productId} não está entre os resultados (${list})`);
+      if (attempt.kind === 'id') {
+        if (rows.length === 1 && listChanged) return rows[0];
+        throw new Error(`busca pelo ID ${attempt.q}: ${rows.length ? `${rows.length} resultados sem o ID visível (${list})` : 'nenhum resultado'}`);
+      }
     }
     const q = tokens(attempt.q);
     const phrase = ` ${q.join(' ')} `;
-    let m = rows.filter((r) => ` ${tokens(r.text).join(' ')} `.includes(phrase));
-    if (!m.length) m = rows.filter((r) => { const t = new Set(tokens(r.text)); return q.every((w) => t.has(w)); });
+    let m = rows.filter((r) => ` ${tokens(r.name || r.text).join(' ')} `.includes(phrase));
+    if (!m.length) m = rows.filter((r) => { const t = new Set(tokens(r.name || r.text)); return q.every((w) => t.has(w)); });
     if (m.length > 1) {
-      const exact = m.filter((r) => tokens(r.text).slice(0, q.length).join(' ') === q.join(' '));
+      const exact = m.filter((r) => tokens(r.name || r.text).slice(0, q.length).join(' ') === q.join(' '));
       if (exact.length === 1) m = exact;
     }
-    if (!m.length) throw new Error(`busca pelo nome "${attempt.q}": nenhum produto corresponde. Resultados vistos: ${list}`);
-    if (m.length > 1) throw new Error(`busca pelo nome "${attempt.q}": ${m.length} produtos parecidos — cole o link do produto para garantir o certo. Resultados: ${list}`);
-    if (productId && rows.some((r) => /\d{12,}/.test(r.html)) && !hasId(m[0], productId) && /\d{12,}/.test(m[0].html)) {
-      throw new Error(`busca pelo nome "${attempt.q}": o produto encontrado tem outro ID (esperado ${productId})`);
-    }
+    if (!m.length) throw new Error(`busca por "${attempt.q}": nenhum produto corresponde. Resultados vistos: ${list}`);
+    if (m.length > 1) throw new Error(`busca por "${attempt.q}": ${m.length} produtos parecidos — importe a vitrine ou informe o ID do produto para garantir o certo. Resultados: ${list}`);
     return m[0];
   }
 
-  // Digita a busca e espera a lista mudar e ficar estável.
+  // Digita a busca e espera a lista mudar e ficar estável (ou a mensagem "nenhum resultado").
   async function searchProducts(search, query) {
     const before = signature(readResults(topDialog()));
     await click(search);
@@ -525,40 +566,107 @@
     let stable = 0;
     let prevSig = null;
     let listChanged = false;
-    const end = Date.now() + 25000;
+    const t0 = Date.now();
+    const end = t0 + 25000;
     while (Date.now() < end) {
       await sleep(700);
-      const cur = readResults(topDialog());
+      const dlg = topDialog();
+      const cur = readResults(dlg);
       const sig = signature(cur);
-      if (cur && sig !== before) listChanged = true;
+      if (sig !== before) listChanged = true;
+      if (!cur && emptyState(dlg) && Date.now() - t0 > 2000) { logAct(`busca "${query}": nenhum resultado`); return { rows: [], listChanged: true }; }
       if (cur && sig === prevSig && (listChanged || Date.now() > end - 15000)) stable++; else stable = 0;
       prevSig = sig;
       rows = cur;
       if (rows && stable >= 2) break;
     }
+    logAct(`busca "${query}": ${rows ? rows.length : 0} resultado(s)${rows ? ' — ' + rows.map((r) => `${(r.name || '').slice(0, 30)} [${r.id || 'sem ID'}${r.status === 'indisponivel' ? ', indisponível' : ''}]`).join('; ') : ''}`);
     return { rows: rows || [], listChanged };
+  }
+
+  // Botão "+ Adicionar" da seção "Adicionar link" do formulário.
+  function findAddLinkButton() {
+    const isAdd = (b) => /^\+?\s*(adicionar|add)$/.test(norm(b.innerText || b.getAttribute('aria-label')));
+    const label = findByText(L.addLink).find((el) => !el.closest('button, [role="button"]'));
+    if (label) {
+      let node = label.parentElement;
+      for (let i = 0; i < 5 && node && node !== document.body; i++) {
+        const bs = [...node.querySelectorAll('button, [role="button"]')].filter((b) => visible(b) && isAdd(b));
+        if (bs.length) return bs[0];
+        node = node.parentElement;
+      }
+    }
+    const direct = findByText(L.addLink).map(clickable).find((b) => b && b.matches && b.matches('button, [role="button"]'));
+    if (direct) return direct;
+    const any = [...document.querySelectorAll('button, [role="button"]')].filter((b) => visible(b) && isAdd(b) && !b.closest('[role="dialog"], [aria-modal="true"]'));
+    return any.length === 1 ? any[0] : null;
+  }
+
+  // Abre "+ Adicionar" → Tipo de link: Produtos → Seguinte → vitrine. Devolve a janela e o campo de busca.
+  async function openShowcase() {
+    const addBtn = await waitFor(findAddLinkButton, { timeout: 30000, what: 'botão "+ Adicionar" da seção "Adicionar link"' });
+    await click(addBtn);
+    const dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela "Adicionar link"' });
+    await human(800, 1400);
+    // "Tipo de link": normalmente já vem "Produtos". Se o menu abriu, escolhe "Produtos" para fechá-lo.
+    const openOption = [...dlg.querySelectorAll('[role="option"], [role="menuitem"], li')].find((o) => visible(o) && L.productsOption.some((w) => norm(o.innerText).startsWith(norm(w))));
+    if (openOption) { logAct('menu "Tipo de link" aberto: escolhendo Produtos'); await click(openOption); }
+    else if (!L.productsOption.some((w) => norm(dlg.innerText).includes(norm(w)))) {
+      const trigger = dlg.querySelector('[role="combobox"], [aria-haspopup], select, [class*="select"], [class*="Select"]');
+      if (trigger) {
+        await click(trigger);
+        const opt = await waitFor(() => [...document.querySelectorAll('[role="option"], [role="menuitem"], li')].find((o) => visible(o) && L.productsOption.some((w) => norm(o.innerText).startsWith(norm(w)))), { timeout: 8000, what: 'opção "Produtos"' });
+        await click(opt);
+      }
+    }
+    const next1 = await waitFor(() => findByText(L.next, { within: topDialog() || dlg, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]') && !disabled(b)), { timeout: 10000, what: 'botão "Seguinte" (tipo de link)' });
+    await click(next1);
+    const sdlg = await waitFor(() => {
+      const d = topDialog();
+      return d && [...d.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].some(visible) ? d : null;
+    }, { timeout: 20000, what: 'vitrine de produtos ("Adicionar links dos produtos")' });
+    const search = [...sdlg.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].find(visible);
+    await waitFor(() => readResults(topDialog()) || emptyState(topDialog()), { timeout: 25000, what: 'lista de produtos da vitrine' });
+    await human(600, 1200);
+    return { dlg: sdlg, search };
+  }
+
+  // Botão de próxima página da paginação da vitrine.
+  function nextPageButton(dlg) {
+    if (!dlg) return null;
+    const byAria = [...dlg.querySelectorAll('[aria-label], [title]')].find((e) => visible(e)
+      && /(next page|proxima pagina|pagina seguinte|proxima|^next$)/.test(norm(e.getAttribute('aria-label') || e.getAttribute('title'))));
+    if (byAria) return clickable(byAria);
+    const pag = [...dlg.querySelectorAll('[class*="agination"], [class*="pager"], [class*="Pager"], nav')].filter(visible).pop();
+    if (!pag) return null;
+    const items = [...pag.querySelectorAll('button, [role="button"], li, a')].filter(visible);
+    const last = items[items.length - 1];
+    if (last && /^(›|>|»|)$/.test((last.innerText || '').trim())) return clickable(last);
+    return null;
+  }
+
+  // Percorre as páginas da vitrine. `onPage(rows)` devolve algo para parar.
+  async function walkPages(onPage, maxPages = 40) {
+    for (let p = 1; p <= maxPages; p++) {
+      const rows = readResults(topDialog()) || [];
+      const hit = onPage(rows, p);
+      if (hit) return hit;
+      const nb = nextPageButton(topDialog());
+      if (!nb || disabled(nb) || nb.matches(':disabled')) { logAct(`fim da vitrine (página ${p})`); return null; }
+      const sig = signature(rows);
+      await click(nb);
+      await waitFor(() => signature(readResults(topDialog())) !== sig, { timeout: 12000, what: `página ${p + 1} da vitrine` }).catch(() => {});
+      await human(300, 700);
+    }
+    return null;
   }
 
   async function linkProduct(job) {
     const label = job.productLabel;
-    const addBtn = await waitFor(() => findByText(L.addLink)[0], { timeout: 20000, what: 'botão "Adicionar link"' });
-    await click(addBtn);
-    let dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de adicionar link' });
-    await human(800, 1400);
+    const { search } = await openShowcase();
 
-    // Escolher o tipo "Produtos" (pode ser um seletor, uma aba ou já vir selecionado)
-    const opt = findByText(L.productsOption, { within: dlg, exact: true })[0];
-    if (opt) { await click(opt); await human(); }
-    const next1 = findByText(L.next, { within: topDialog() || dlg, exact: true }).map(clickable).find((b) => !disabled(b));
-    if (next1) { await click(next1); await human(1200, 2000); }
-
-    dlg = await waitFor(topDialog, { timeout: 15000, what: 'janela de produtos' });
-    const search = await waitFor(() => [...dlg.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].find(visible), { timeout: 20000, what: 'campo de busca de produto' });
-    await human(800, 1500);
-
-    // 1º cola o link do produto; depois tenta o ID; por último o nome do produto
+    // 1º busca pelo ID; depois pelo nome; por último folheia a vitrine procurando o ID
     const attempts = [];
-    if (job.productLink && /^https?:\/\//i.test(job.productLink)) attempts.push({ q: job.productLink, kind: 'link' });
     if (job.productId) attempts.push({ q: job.productId, kind: 'id' });
     if (job.productQuery) attempts.push({ q: job.productQuery, kind: 'name' });
     let chosen = null;
@@ -567,23 +675,33 @@
       const { rows, listChanged } = await searchProducts(search, a.q);
       try {
         chosen = matchProduct(rows, a, job.productId, listChanged);
-        logAct(`✓ produto encontrado ${{ link: 'colando o link', id: 'pela busca do ID', name: 'pela busca do nome' }[a.kind]}`);
+        logAct(`✓ produto encontrado ${a.kind === 'id' ? 'pela busca do ID' : `buscando "${a.q}"`}`);
         break;
       } catch (e) {
         errors.push(e.message);
         logAct('• ' + e.message);
       }
     }
+    if (!chosen && job.productId) {
+      logAct(`procurando o ID ${job.productId} página por página na vitrine`);
+      await searchProducts(search, '');
+      chosen = await walkPages((rows) => rows.find((r) => hasId(r, job.productId)));
+      if (chosen) logAct('✓ produto encontrado folheando a vitrine');
+      else errors.push(`o ID ${job.productId} não está em nenhuma página da vitrine`);
+    }
     if (!chosen) throw new Error(`não vinculei nenhum produto para não errar o link — ${errors.join(' | ')}. Confira se o produto está na sua vitrine de afiliado.`);
-    linkedProduct = chosen.text.slice(0, 160);
-    logAct(`✓ produto escolhido: ${linkedProduct}`);
+    linkedProduct = `${chosen.name || chosen.text.slice(0, 120)}${chosen.id ? ` (ID ${chosen.id})` : ''}`;
+    logAct(`✓ produto escolhido: ${linkedProduct}${chosen.price ? ` · ${chosen.price}` : ''}${chosen.status ? ` · ${chosen.status}` : ''}`);
+    if (chosen.status === 'indisponivel' || chosen.blocked) {
+      throw Object.assign(new Error(`o produto "${(chosen.name || '').slice(0, 60)}" está Indisponível na sua vitrine (sem estoque) — não postei para o vídeo não sair sem carrinho`), { unavailable: true });
+    }
     await click(chosen.el.matches('input') ? (chosen.el.closest('label') || chosen.el) : chosen.el);
     await human(800, 1400);
     if (!isOn(chosen.el)) { await click(chosen.el); await human(); }
     if (chosen.el.matches('input, [role="radio"], [role="checkbox"]') && !isOn(chosen.el)) throw new Error('não consegui selecionar o produto na lista');
 
     const listDlg = topDialog();
-    const next2 = await waitFor(() => findByText(L.next.concat(L.add), { within: topDialog(), exact: true }).map(clickable).find((b) => !disabled(b)), { timeout: 15000, what: 'botão Próximo após escolher o produto' });
+    const next2 = await waitFor(() => findByText(L.next.concat(L.add), { within: topDialog(), exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]') && !disabled(b)), { timeout: 15000, what: 'botão "Seguinte" após escolher o produto' });
     await click(next2);
 
     // Tela do nome do produto (até 30 caracteres) + Adicionar — ou a janela já fechou
@@ -596,10 +714,11 @@
       return null;
     }, { timeout: 15000, what: 'tela do nome do produto' });
     if (d3 !== 'closed') {
+      logAct(`tela do nome do produto: "${(d3.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}"`);
       await human(600, 1200);
       const nameInput = [...d3.querySelectorAll('input[maxlength], textarea[maxlength], input[type="text"], input:not([type])')].find((i) => visible(i) && i !== search);
       if (nameInput && label) { await click(nameInput); await typeInto(nameInput, label.slice(0, 30)); }
-      const addFinal = await waitFor(() => findByText(L.add, { within: d3, exact: true }).map(clickable).find((b) => !disabled(b)), { timeout: 10000, what: 'botão Adicionar do produto' });
+      const addFinal = await waitFor(() => findByText(L.add, { within: d3, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]') && !disabled(b)), { timeout: 10000, what: 'botão "Adicionar" do produto' });
       await click(addFinal);
       await human(1500, 2500);
     }
@@ -616,8 +735,33 @@
       }
       return false;
     };
-    const attached = await waitFor(() => marks.some(appears), { timeout: 8000, what: 'produto anexado' }).catch(() => false);
+    const attached = await waitFor(() => marks.some(appears), { timeout: 8000, what: 'produto anexado', quiet: true }).catch(() => false);
     logAct(attached ? '✓ produto anexado aparece na página' : '⚠ não consegui ver o nome do produto anexado na página (confira o 1º post)');
+  }
+
+  // Lê toda a vitrine (todas as páginas) e fecha a janela sem escolher nada.
+  async function readShowcase() {
+    await openShowcase();
+    const items = new Map();
+    await walkPages((rows, p) => {
+      let n = 0;
+      for (const r of rows) if (r.id && !items.has(r.id)) { items.set(r.id, { id: r.id, name: r.name, price: r.price, stock: r.stock, status: r.blocked ? 'indisponivel' : (r.status || 'ativo') }); n++; }
+      logAct(`página ${p} da vitrine: ${rows.length} produto(s), ${n} novo(s)`);
+      reportProgress(`Lendo sua vitrine… ${items.size} produtos`);
+      return null;
+    });
+    for (let i = 0; i < 3; i++) {
+      const d = topDialog();
+      if (!d) break;
+      const cancel = findByText(L.cancel, { within: d, exact: true }).map(clickable).find((b) => b.matches('button, [role="button"]'));
+      if (!cancel) break;
+      await click(cancel);
+      await human(500, 900);
+    }
+    return [...items.values()];
+  }
+  function reportProgress(text) {
+    report('job-progress', { jobId: JOB?.id, step: text });
   }
 
   // ---------- conteúdo de marca ----------
@@ -739,6 +883,7 @@
       if (baselineErrors.length) logAct(`(textos de erro já presentes antes de começar, ignorados: ${baselineErrors.join(', ')})`);
       await step('Aguardando a página de upload', () => waitFor(findFileInput, { timeout: 60000, what: 'página de upload carregada (você está logado no TikTok?)' }));
       await dismissPopups();
+      await discardOldDraft();
       const file = await step('Lendo o vídeo da pasta', () => fetchVideo(job.path));
       await step('Enviando o vídeo', () => uploadVideo(file));
       await step('Escrevendo a legenda', () => writeCaption(job.caption));
@@ -758,16 +903,50 @@
     } catch (e) {
       if (aborted) return;
       logAct(`❌ ${e.message || e}`);
-      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), linkedProduct, clickedPublish, loggedOut: !clickedPublish && !pageError && isLoggedOut(), pageError: !!pageError });
+      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), linkedProduct, clickedPublish, loggedOut: !clickedPublish && !pageError && isLoggedOut(), pageError: !!pageError, unavailable: !!e.unavailable });
     }
   }
 
-  if (window.__ttapExpose) window.__ttapDebug = { controlNear, findByText, readResults, matchProduct, topDialog, isOn, setLabels: (l) => { L = l; } };
+  // Importação da vitrine: abre o formulário (com um vídeo da pasta, sem publicar) e lê todos os produtos.
+  async function runSync(job) {
+    JOB = job;
+    L = job.labels || {};
+    actLog = [];
+    pendingLog = [];
+    aborted = false;
+    pageError = null;
+    HUMAN = job.speed !== 'normal';
+    SPEED = HUMAN ? 1.6 : 1;
+    logAct(`início: IMPORTAR VITRINE · usando o vídeo ${job.path} só para abrir o formulário (nada é publicado)`);
+    try {
+      baselineErrors = errorPhrases();
+      await step('Aguardando a página de upload', () => waitFor(findFileInput, { timeout: 60000, what: 'página de upload carregada (você está logado no TikTok?)' }));
+      await dismissPopups();
+      await discardOldDraft();
+      const file = await step('Lendo o vídeo da pasta', () => fetchVideo(job.path));
+      await step('Enviando o vídeo', () => uploadVideo(file));
+      await dismissPopups();
+      const items = await step('Lendo sua vitrine', () => readShowcase());
+      logAct(`✅ ${items.length} produtos lidos da vitrine`);
+      report('sync-result', { jobId: job.id, ok: true, items, log: fmtLog() });
+    } catch (e) {
+      if (aborted) return;
+      logAct(`❌ ${e.message || e}`);
+      report('sync-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), loggedOut: !pageError && isLoggedOut() });
+    }
+  }
+
+  if (window.__ttapExpose) window.__ttapDebug = { controlNear, findByText, readResults, matchProduct, topDialog, isOn, parseRow, nextPageButton, findAddLinkButton, setLabels: (l) => { L = l; } };
 
   chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     if (msg?.type === 'run-job') {
       sendResponse({ accepted: true });
       if (!JOB || JOB.id !== msg.job.id) runJob(msg.job);
+      return false;
+    }
+    if (msg?.type === 'run-sync') {
+      sendResponse({ accepted: true });
+      if (!JOB || JOB.id !== msg.job.id) runSync(msg.job);
       return false;
     }
     if (msg?.type === 'abort-job') {

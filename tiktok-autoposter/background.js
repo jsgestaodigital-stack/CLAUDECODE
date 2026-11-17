@@ -1,10 +1,11 @@
 // Service worker: agenda, escolhe o próximo vídeo, abre o TikTok Studio e coordena a postagem.
-import { DEFAULT_SETTINGS, DEFAULT_LABELS } from './lib/defaults.js';
+import { DEFAULT_SETTINGS, DEFAULT_LABELS, mergeLabels } from './lib/defaults.js';
 import {
   computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked, linkKey,
   migrate, productKeyOf, itemOf, newCatalogKey,
 } from './lib/scheduler.js';
 import { generateCaption, rememberCaption } from './lib/captions.js';
+import { mergeShowcase } from './lib/showcase.js';
 import { firstUrl } from './lib/productlink.js';
 
 const MIN = 60 * 1000;
@@ -16,7 +17,7 @@ const HISTORY_LIMIT = 800;
 async function load() {
   const s = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'products', 'videos', 'history', 'runtime']);
   const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
-  settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
+  settings.labels = mergeLabels(settings.labels);
   let state = {
     settings,
     catalog: s.catalog,
@@ -321,6 +322,10 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     await saveAll(state);
     return { ok: false, error: `O produto "${product.displayName}" está pausado.` };
   }
+  if (product?.unavailable && videoPath && !dryRun && state.settings.linkProduct) {
+    await saveAll(state);
+    return { ok: false, error: `O produto "${product.displayName}" está indisponível na vitrine (sem estoque). Reative em Produtos quando voltar.` };
+  }
   if (state.settings.linkProduct && !isLinkReady(product)) {
     const msg = `Configure o link do produto "${product?.displayName || pick.product}" antes de postar (Produtos → Editar).`;
     if (!videoPath && rt.running) {
@@ -448,6 +453,7 @@ async function finishJob(state, result) {
   const rt = state.runtime;
   const job = rt.currentJob;
   if (!job || (result.jobId && result.jobId !== job.id)) return lateResult(state, result);
+  if (job.type === 'sync') return finishSync(state, result);
   // registro: o que a página mandou no final, ou o que foi chegando durante a postagem
   result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
   if (job.tabId && (!result.ok || job.dryRun)) result.shot = await screenshot(job.tabId);
@@ -458,6 +464,11 @@ async function finishJob(state, result) {
   const product = state.catalog[job.product];
   const now = Date.now();
   const durationMs = now - job.startedAt;
+
+  // Produto "Indisponível" na vitrine: marca no catálogo e deixa os vídeos dele na fila.
+  if (!result.ok && result.unavailable && product) {
+    state.catalog[job.product] = { ...product, unavailable: true, unavailableAt: now };
+  }
 
   if (job.dryRun) {
     addHistory(state, {
@@ -472,6 +483,20 @@ async function finishJob(state, result) {
     }
     await saveAll(state);
     notify(result.ok ? 'Teste concluído ✅' : 'Teste falhou ❌', result.ok ? 'Tudo preenchido. A aba ficou aberta para você conferir (nada foi publicado).' : `${result.step}: ${result.error}`);
+    return;
+  }
+
+  if (!result.ok && result.unavailable) {
+    if (job.tabId) rt.staleTabId = job.tabId;
+    addHistory(state, {
+      status: 'failed', product: job.product, productName: job.productName, video: job.path, caption: job.caption,
+      error: result.error, step: result.step, diag: result.diag, durationMs, attempt: job.attempt, log: result.log, linkedProduct: result.linkedProduct, shot: result.shot,
+    });
+    rt.retry = null;
+    if (rt.running) rt.nextRunAt = now + 2 * MIN; // segue com os outros produtos
+    await saveAll(state);
+    syncPower(rt, s);
+    notify('AutoPoster: produto indisponível', `"${job.productName}" está sem estoque na sua vitrine. Os vídeos dele ficam na fila; reative o produto quando voltar.`);
     return;
   }
 
@@ -557,6 +582,61 @@ async function finishJob(state, result) {
   }
 }
 
+// ---------- importar a vitrine ----------
+async function startSync(state) {
+  const rt = state.runtime;
+  if (rt.currentJob) return { ok: false, error: 'Espere a postagem em andamento terminar.' };
+  const scan = await rescan(state);
+  if (!scan.ok) return { ok: false, error: scan.error || 'Não foi possível ler a pasta de vídeos.' };
+  const v = Object.values(state.videos).filter((x) => x.status !== 'missing').sort((a, b) => (a.size || 0) - (b.size || 0))[0];
+  if (!v) return { ok: false, error: 'Coloque pelo menos um vídeo na pasta: ele é usado só para abrir o formulário (nada é publicado).' };
+  const job = {
+    id: crypto.randomUUID(), type: 'sync', path: v.path, productName: 'Vitrine', startedAt: Date.now(), lastProgressAt: Date.now(),
+    step: 'Abrindo o TikTok Studio', labels: state.settings.labels, speed: state.settings.speed || 'human', log: [],
+  };
+  rt.currentJob = job;
+  await saveAll(state);
+  try {
+    const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active: true });
+    job.tabId = tab.id;
+    rt.currentJob = job;
+    await save({ runtime: rt });
+    await waitTabComplete(tab.id, 90 * 1000);
+    await sleep(2500);
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/tiktok.js'] });
+    await chrome.tabs.sendMessage(tab.id, { type: 'run-sync', job });
+  } catch (e) {
+    await finishSync(state, { ok: false, error: 'Falha ao abrir o TikTok Studio: ' + (e.message || e), jobId: job.id });
+    return { ok: false, error: String(e.message || e) };
+  }
+  return { ok: true, jobId: job.id };
+}
+
+async function finishSync(state, result) {
+  const rt = state.runtime;
+  const job = rt.currentJob;
+  if (!job || job.type !== 'sync' || (result.jobId && result.jobId !== job.id)) return;
+  result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
+  if (!result.ok && job.tabId) result.shot = await screenshot(job.tabId);
+  rt.currentJob = null;
+  const now = Date.now();
+  let msg;
+  if (result.ok) {
+    const { added, updated } = mergeShowcase(state.catalog, result.items, now);
+    const unavailable = (result.items || []).filter((i) => i.status === 'indisponivel').length;
+    rt.lastSyncAt = now;
+    msg = `${(result.items || []).length} produtos na vitrine · ${added} novos no catálogo · ${updated} atualizados${unavailable ? ` · ${unavailable} indisponíveis` : ''}`;
+    addHistory(state, { status: 'sync', productName: 'Vitrine importada', error: null, step: msg, log: result.log, durationMs: now - job.startedAt });
+    if (job.tabId) setTimeout(() => closeTikTokTab(job.tabId), 1500);
+    notify('Vitrine importada ✅', msg, { telegram: false });
+  } else {
+    addHistory(state, { status: 'failed', productName: 'Importar vitrine', error: result.error, step: result.step, diag: result.diag, log: result.log, shot: result.shot, durationMs: now - job.startedAt });
+    notify('Importar vitrine falhou ❌', `${result.step || ''}: ${result.error}`, { telegram: false });
+  }
+  await saveAll(state);
+  return { ok: !!result.ok, message: msg };
+}
+
 // Resultado que chegou depois de a extensão ter desistido da postagem (tempo esgotado etc.).
 // Se a página diz que publicou, registra como publicado para o vídeo não ser postado de novo.
 async function lateResult(state, result) {
@@ -612,6 +692,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // espera feita aqui para não sofrer o atraso de timers de abas em segundo plano
     setTimeout(() => sendResponse(true), Math.min(Math.max(Number(msg.ms) || 0, 0), 60000));
     return true;
+  }
+  if (msg.type === 'sync-result') {
+    locked(async () => finishSync(await load(), msg));
+    return false;
   }
   if (msg.type === 'job-result') {
     locked(async () => finishJob(await load(), msg));
@@ -676,7 +760,7 @@ async function command(name, p) {
       const d = p.data || {};
       if (d.app !== 'autoposter-tiktok-shop' || (typeof d.catalog !== 'object' && typeof d.products !== 'object')) return { ok: false, error: 'Esse arquivo não é um backup do AutoPoster.' };
       const settings = { ...DEFAULT_SETTINGS, ...(d.settings || {}) };
-      settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
+      settings.labels = mergeLabels(settings.labels);
       rt.running = false;
       rt.nextRunAt = null;
       rt.retry = null;
@@ -689,6 +773,8 @@ async function command(name, p) {
     }
     case 'post-now':
       return startJob(state, { dryRun: false, videoPath: p.path });
+    case 'sync-showcase':
+      return startSync(state);
     case 'dry-run':
       return startJob(state, { dryRun: true, videoPath: p.path });
     case 'cancel-job':

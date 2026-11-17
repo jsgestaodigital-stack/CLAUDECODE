@@ -241,7 +241,7 @@ async function main() {
   assert(h.status === 'posted', 'v01 publicado');
   assert(res.fileName === 'v01.mp4' && res.fileSize === VIDEO_BYTES, `arquivo chegou inteiro (${res.fileSize} bytes)`);
   assert(res.firstByte === 7 && res.lastByte === 9, 'conteúdo do arquivo íntegro');
-  assert(/^https:.*1729384756123/.test(res.searches[0]) && res.pickedText.includes('1729384756123'), 'colou o link do produto na busca e escolheu o item com o ID certo');
+  assert(res.searches[0] === '1729384756123' && res.searches[1] === 'Fone Bluetooth X Pro Max' && res.pickedText.includes('1729384756123') && res.linkedId === '1729384756123', 'buscou pelo ID, depois pelo nome, e escolheu a linha com o ID certo');
   assert(res.productLabel === 'Fone Bluetooth X Pro', 'nome do link preenchido');
   assert(/Fone Bluetooth X/.test(res.caption) && !/v01/.test(res.caption), 'legenda sem o nome do arquivo');
 
@@ -387,6 +387,60 @@ async function main() {
   assert(report.error === h.error && report.log.length === h.log.length && report.screenshot, 'relatório baixado com erro, passos e imagem');
   await dash.click('#logClose');
 
+  console.log('8h) Importar da minha vitrine (lê todas as páginas, não publica)');
+  await dash.click('[data-view="products"]');
+  const nCat = Object.keys((await get(['catalog'])).catalog).length;
+  const tS = Date.now();
+  pp = nextTikTokPage();
+  await dash.click('#btnSync');
+  tt = await pp;
+  await dash.waitForSelector('#jobCard:not([hidden])', { state: 'attached' }).catch(() => {});
+  h = await waitHistory((x) => x.ts > tS && (x.status === 'sync' || x.status === 'failed'), 180000);
+  if (h.status !== 'sync') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
+  st = await get(['catalog', 'history']);
+  const cat = st.catalog;
+  assert(h.status === 'sync' && /12 produtos/.test(h.step), 'vitrine importada: ' + h.step);
+  assert(cat[FONE].showcase && cat[FONE].showcase.price === 'R$ 129,90' && cat[FONE].displayName === 'Fone Bluetooth X', 'produto que já existia foi atualizado sem perder o nome que você deu');
+  assert(Object.keys(cat).length === nCat + 11, `11 produtos novos no catálogo (${Object.keys(cat).length} no total)`);
+  const LENCOL = 'id_1736378523664746282';
+  assert(cat[LENCOL] && cat[LENCOL].niche === 'casa' && cat[LENCOL].displayName === 'Lençol' && !cat[LENCOL].unavailable, 'lençol importado: nome curto, nicho casa, ativo');
+  assert(cat.id_1733607714192197160.unavailable && cat.id_1734042014637787046.unavailable, 'os 2 lençóis sem estoque vieram como indisponíveis');
+  assert(cat.id_1739999999999999991, 'leu até a última página (garrafa, página 3)');
+  await sleep(2500);
+  assert(tt.isClosed(), 'fechou a aba do TikTok depois de importar');
+  assert(!st.history.some((x) => x.ts > tS && x.status === 'posted'), 'nada foi publicado na importação');
+  await dash.waitForFunction(() => document.querySelector('#productsGrid').textContent.includes('Indisponível'));
+  await dash.screenshot({ path: path.join(SHOTS, '13-vitrine.png'), fullPage: true });
+
+  console.log('8i) Produto indisponível na hora de postar → não posta, marca e mantém o vídeo na fila');
+  const KIT_LENCOL = 'id_1733607714192197160';
+  await cmd('catalog-save', { key: KIT_LENCOL, data: { unavailable: false } });
+  await cmd('assign', { folder: 'sem-link', catalogKey: KIT_LENCOL });
+  pp = nextTikTokPage();
+  const tU = Date.now();
+  await cmd('dry-run', { path: 'sem-link/s1.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.ts > tU && x.video === 'sem-link/s1.mp4', 180000);
+  st = await get(['catalog', 'videos']);
+  assert(h.status === 'failed' && /Indisponível/.test(h.error), 'recusou o produto indisponível: ' + h.error.slice(0, 100));
+  assert(st.catalog[KIT_LENCOL].unavailable && st.videos['sem-link/s1.mp4'].status === 'pending', 'produto marcado indisponível e vídeo continua pendente');
+  r = await cmd('post-now', { path: 'sem-link/s1.mp4' });
+  assert(!r.ok && /indispon/i.test(r.error), 'postar à mão um produto indisponível é recusado');
+
+  console.log('8j) Sem nome para buscar → procura o ID página por página');
+  const GARRAFA = 'id_1739999999999999991';
+  await cmd('catalog-save', { key: GARRAFA, data: { productQuery: '' } });
+  await cmd('assign', { folder: 'sem-link', catalogKey: GARRAFA });
+  pp = nextTikTokPage();
+  const tG = Date.now();
+  await cmd('dry-run', { path: 'sem-link/s1.mp4' });
+  tt = await pp;
+  h = await waitHistory((x) => x.ts > tG && x.video === 'sem-link/s1.mp4', 180000);
+  res = await tt.evaluate(() => window.__result);
+  if (h.status !== 'dry-run') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
+  assert(h.status === 'dry-run' && res.linkedId === '1739999999999999991' && res.pagesSeen >= 3, `achou a garrafa na página ${res.pagesSeen} da vitrine`);
+  await cmd('assign', { folder: 'sem-link', catalogKey: null });
+
   console.log('9) Configurações pela tela');
   await dash.click('[data-view="settings"]');
   await dash.click('#intervalSeg [data-v="30"]');
@@ -459,7 +513,7 @@ async function main() {
   h = await waitHistory((x) => x.dryRun && x.video === 'fone-bluetooth-x/v02.mp4');
   res = await tt.evaluate(() => window.__result);
   if (h.status !== 'dry-run') console.log(JSON.stringify(h, null, 2));
-  assert(h.status === 'dry-run' && res.searches.length === 3 && res.searches[1] === '1729384756123' && res.searches[2] === 'Fone Bluetooth X Pro Max' && res.pickedText.includes('Fone Bluetooth X Pro Max'), 'tentou o link, depois o ID e achou pelo nome');
+  assert(h.status === 'dry-run' && res.searches.length === 2 && res.searches[0] === '1729384756123' && res.searches[1] === 'Fone Bluetooth X Pro Max' && res.pickedText.includes('1729384756123'), 'tentou o ID e achou pelo nome, conferindo o ID');
   await cmd('save-settings', { settings: { uploadUrl: 'https://www.tiktok.com/tiktokstudio/upload?draft=1' } });
 
   console.log('13) TikTok deslogado → pausa e avisa, vídeo continua na fila');

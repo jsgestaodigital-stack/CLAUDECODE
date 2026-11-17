@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, DEFAULT_LABELS } from '../lib/defaults.js';
+import { DEFAULT_SETTINGS, DEFAULT_LABELS, mergeLabels } from '../lib/defaults.js';
 import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey, productKeyOf, itemOf } from '../lib/scheduler.js';
 import { previewSeries, NICHES } from '../lib/captions.js';
 import { getRootHandle, saveRootHandle, permissionState } from '../lib/fsaccess.js';
@@ -54,7 +54,7 @@ function toast(msg, bad = false) {
 async function loadState() {
   const s = await chrome.storage.local.get(['settings', 'catalog', 'folders', 'videos', 'history', 'runtime']);
   const settings = { ...DEFAULT_SETTINGS, ...(s.settings || {}) };
-  settings.labels = { ...DEFAULT_LABELS, ...(settings.labels || {}) };
+  settings.labels = mergeLabels(settings.labels);
   S = { settings, catalog: s.catalog || {}, folders: s.folders || {}, videos: s.videos || {}, history: s.history || [], runtime: s.runtime || {} };
 }
 
@@ -88,7 +88,7 @@ const fmtSize = (b) => (b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFix
 const STATUS = {
   pending: ['Pendente', 'info'], posted: ['Publicado', 'ok'], failed: ['Falhou', 'bad'],
   skipped: ['Pulado', ''], missing: ['Sumiu da pasta', 'warn'], 'dry-run': ['Teste ok', 'violet'], idle: ['Fila vazia', 'warn'],
-  unconfirmed: ['Verificar no TikTok', 'warn'],
+  unconfirmed: ['Verificar no TikTok', 'warn'], sync: ['Vitrine importada', 'ok'],
 };
 const pill = (st) => `<span class="pill ${STATUS[st]?.[1] || ''}">${STATUS[st]?.[0] || esc(st)}</span>`;
 
@@ -129,8 +129,8 @@ function setupSteps() {
     {
       done: ready.length > 0,
       title: 'Cadastrar produtos',
-      text: ready.length ? `${ready.length} produto${ready.length > 1 ? 's' : ''} no catálogo` : 'Cole o link do produto do TikTok Shop',
-      btn: ['new-product', 'Adicionar produto'],
+      text: ready.length ? `${ready.length} produto${ready.length > 1 ? 's' : ''} no catálogo` : 'Importe os produtos da sua vitrine de afiliado',
+      btn: ['sync', 'Importar vitrine'],
     },
     {
       done: queued,
@@ -256,7 +256,7 @@ function renderOverview() {
   const job = S.runtime.currentJob;
   $('#jobCard').hidden = !job;
   if (job) {
-    $('#jobTitle').textContent = `${job.dryRun ? 'Testando (sem publicar)' : 'Postando'}: ${job.productName || job.product} — ${job.path.split('/').pop()}`;
+    $('#jobTitle').textContent = job.type === 'sync' ? 'Importando a sua vitrine do TikTok Studio (nada é publicado)' : `${job.dryRun ? 'Testando (sem publicar)' : 'Postando'}: ${job.productName || job.product} — ${job.path.split('/').pop()}`;
     $('#jobStep').textContent = job.step || '';
     const idx = Math.max(0, JOB_STEPS.indexOf(job.step));
     $('#jobBar').style.width = `${Math.round(((idx + 1) / JOB_STEPS.length) * 100)}%`;
@@ -333,6 +333,7 @@ function renderProducts() {
     const off = p.enabled === false;
     let badge;
     if (off) badge = '<span class="pill">Pausado</span>';
+    else if (p.unavailable) badge = `<span class="pill bad">${icon('alert')}Indisponível</span>`;
     else if (!ready) badge = `<span class="pill warn">${icon('alert')}Falta o link</span>`;
     else if (!total) badge = '<span class="pill">Sem vídeos ligados</span>';
     else if (!c('pending')) badge = '<span class="pill">Sem vídeos novos</span>';
@@ -340,10 +341,13 @@ function renderProducts() {
     const tested = p.linkTestedAt && p.linkTestedKey === linkKey(p);
     const niche = NICHES[p.niche]?.name || NICHES.geral.name;
     const safeUrl = /^https:\/\/([a-z0-9-]+\.)*tiktok\.com\//i.test(p.productUrl || '') ? p.productUrl : '';
-    return `<div class="product ${off ? 'off' : ''} ${!ready && !off ? 'needs' : ''}">
+    const sc = p.showcase;
+    return `<div class="product ${off ? 'off' : ''} ${(!ready || p.unavailable) && !off ? 'needs' : ''}">
       <div class="top"><div style="min-width:0"><h3>${esc(p.displayName)}</h3><div class="folder-name">${folders.length ? '📁 ' + folders.map(esc).join(' · ') : 'Nenhuma pasta ligada'}</div></div>${badge}</div>
       <div class="bar" title="${pct}% publicado"><i style="width:${pct}%"></i></div>
       <div class="counts"><div><b>${c('pending')}</b>pendentes</div><div><b>${c('posted')}</b>publicados</div><div><b>${c('failed')}</b>falhas</div></div>
+      ${sc ? `<div class="muted small">🛍 Vitrine: <b style="color:var(--text)">${esc(sc.price || '—')}</b> · estoque ${sc.stock ?? '—'} · ${sc.status === 'indisponivel' ? '<span style="color:var(--red)">Indisponível</span>' : '<span style="color:var(--green)">Ativo</span>'} · lido ${fmtWhen(sc.syncedAt)}</div>` : ''}
+      ${p.unavailable ? `<div class="small" style="color:var(--red)">Sem estoque na vitrine: os vídeos deste produto ficam na fila até ele voltar. <button class="link" data-reactivate="${esc(p.key)}">Já voltou — reativar</button></div>` : ''}
       <div class="linkbox">
         ${p.productId ? `<div class="row">${icon('cart')}<span>ID <b>${esc(p.productId)}</b>${safeUrl ? ` · <a href="${esc(safeUrl)}" target="_blank" rel="noopener">abrir ↗</a>` : ''}</span></div>` : ''}
         ${p.productQuery ? `<div class="row">${icon('text')}<span>Nome: <b>${esc(p.productQuery)}</b></span></div>` : ''}
@@ -552,7 +556,7 @@ async function saveSettings(e) {
     telegramEachPost: f.telegramEachPost.checked,
     telegramSummary: f.telegramSummary.checked,
     telegramSummaryHour: clamp(Number(f.telegramSummaryHour.value), 0, 23, 22),
-    labels: { ...DEFAULT_LABELS, ...labels },
+    labels: mergeLabels(labels),
   };
   const reschedule = settings.intervalMinutes !== S.settings.intervalMinutes;
   const r = await send('save-settings', { settings, reschedule });
@@ -760,6 +764,7 @@ document.addEventListener('click', async (e) => {
     if (setup === 'dry') return dryRun();
     if (setup === 'start') return toggleRun();
     if (setup === 'new-product') return openProduct(null);
+    if (setup === 'sync') return $('#btnSync').click();
   }
   if (t.dataset.newProduct) return openProduct(null);
   if (t.dataset.deleteProd) return deleteProduct(t.dataset.deleteProd);
@@ -776,6 +781,7 @@ document.addEventListener('click', async (e) => {
     return p && send('catalog-save', { key: p.key, data: { enabled: p.enabled === false } });
   }
   if (t.dataset.log) return openLog(t.dataset.log);
+  if (t.dataset.reactivate) return send('catalog-save', { key: t.dataset.reactivate, data: { unavailable: false } }).then((r) => r.ok && toast('Produto reativado ✓'));
   if (t.dataset.post) return postNow(t.dataset.post);
   if (t.dataset.dry) return dryRun(t.dataset.dry);
   if (t.dataset.skip) return send('set-video-status', { paths: [t.dataset.skip], status: 'skipped' });
@@ -845,6 +851,12 @@ $('#btnInspect').onclick = async () => {
 
 $('#queueProduct').onchange = (e) => { ui.queueFolder = e.target.value; renderQueue(); };
 $('#btnNewProduct').onclick = () => openProduct(null);
+$('#btnSync').onclick = async () => {
+  if (folderPerm !== 'granted') { toast('Conecte a pasta de vídeos primeiro (um vídeo dela é usado só para abrir o formulário).', true); return; }
+  if (!confirm('Importar a sua vitrine?\n\nA extensão vai abrir o TikTok Studio, carregar um vídeo da sua pasta só para abrir o formulário, ler todos os produtos da vitrine e fechar SEM publicar nada.')) return;
+  const r = await send('sync-showcase');
+  if (r.ok) toast('Lendo a sua vitrine no TikTok Studio…');
+};
 
 // Escolher o produto de uma pasta / de um vídeo
 document.addEventListener('change', async (e) => {
