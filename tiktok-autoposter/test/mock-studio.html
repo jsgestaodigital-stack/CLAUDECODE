@@ -141,7 +141,13 @@
     let p = 0;
     const t = setInterval(() => {
       p += Q.has('slow') ? 1 : 20; $('pct').textContent = p + '%';
-      if (p >= 100) { clearInterval(t); $('status').textContent = 'Enviado'; $('post').disabled = false; }
+      if (p >= 100) {
+        clearInterval(t); $('status').textContent = 'Enviado'; $('post').disabled = false;
+        // como o TikTok: ao concluir o envio, a descrição interna volta a ser o nome do arquivo
+        // (sem mudar a tela) — quem digitou antes disso perde a legenda no post
+        capState = f.name.replace(/\.\w+$/, '');
+        R.events.push('upload-done');
+      }
     }, 400);
   });
   // Editor como o do TikTok (Draft.js): o texto PUBLICADO é o "estado" do editor, não o que está na tela.

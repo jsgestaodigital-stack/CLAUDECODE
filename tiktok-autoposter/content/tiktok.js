@@ -980,8 +980,11 @@
       await discardOldDraft();
       const file = await step('Lendo o vídeo da pasta', () => fetchVideo(job.path));
       await step('Enviando o vídeo', () => uploadVideo(file));
-      await step('Escrevendo a legenda', () => writeCaption(job.caption));
+      // A legenda só depois do envio terminar: ao concluir o envio, o TikTok redefine a descrição
+      // interna para o nome do arquivo (a tela continua mostrando o texto digitado antes).
       await step('Aguardando o envio terminar', () => waitUploadDone());
+      await human(1500, 2500);
+      await step('Escrevendo a legenda', () => writeCaption(job.caption));
       await dismissPopups();
       if (job.linkProduct && (job.productId || job.productQuery)) await step('Vinculando o produto (carrinho)', () => linkProduct(job));
       if (job.brandedContent) await step('Marcando "Conteúdo de marca"', () => markBrandedContent());
