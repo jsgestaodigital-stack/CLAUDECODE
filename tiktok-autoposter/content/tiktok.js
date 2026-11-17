@@ -11,6 +11,7 @@
   let currentStep = '';
   let JOB = null;
   let linkedProduct = null;
+  let writtenCaption = null;
   let clickedPublish = false;
   let aborted = false;
   let lastBeat = 0;
@@ -427,39 +428,105 @@
     ed.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
   }
 
+  // Confere a legenda: tem o começo e o fim do texto, e NÃO tem mais o nome do arquivo.
+  function captionOk(ed, caption, original) {
+    const t = norm(ed.innerText);
+    const first = norm(caption.split('\n')[0]).slice(0, 25);
+    const lastWord = norm(caption.trim().split(/\s+/).pop()).slice(0, 20);
+    const orig = norm(original);
+    const leftover = orig && orig.length > 3 && !norm(caption).includes(orig) && t.includes(orig);
+    return t.includes(first) && t.includes(lastWord) && !leftover;
+  }
+
+  // Seleciona todo o texto do campo do jeito do teclado (Ctrl+A dentro do campo).
+  function selectAllKeyboard(ed) {
+    ed.focus();
+    caretToEnd(ed);
+    document.execCommand('selectAll', false, null);
+    document.dispatchEvent(new Event('selectionchange'));
+  }
+
+  // Pedaços de 1 a 3 palavras (quebras de linha separadas), para digitar em ritmo humano.
+  function chunksOf(text) {
+    if (!HUMAN) return [text];
+    const parts = text.match(/\n|[^\s]+[ \t]*/g) || [text];
+    const out = [];
+    for (let i = 0; i < parts.length;) {
+      const n = parts[i] === '\n' ? 1 : Math.min(parts.length - i, Math.round(rnd(1, 3)));
+      out.push(parts.slice(i, i + n).join(''));
+      i += n;
+    }
+    return out;
+  }
+
+  // Estratégias para escrever no editor do TikTok, da mais "teclado de verdade" para a menos.
+  // Evento de digitação que o editor do TikTok (Draft.js/React) escuta. Ele não muda a tela sozinho:
+  // o texto só aparece se o editor o registrar — então "apareceu" = "o editor guardou".
+  function typeEvent(ed, text) {
+    const ev = document.createEvent('TextEvent');
+    ev.initTextEvent('textInput', true, true, window, text, 0, 'pt-BR');
+    ed.dispatchEvent(ev);
+  }
+
+  // Estratégias para escrever no editor do TikTok, da mais confiável para a menos.
+  const CAPTION_STRATEGIES = [
+    {
+      name: 'digitação (evento de teclado que o editor registra)',
+      async run(ed, caption) {
+        selectAllKeyboard(ed);
+        await human(250, 500);
+        for (const chunk of chunksOf(caption)) {
+          typeEvent(ed, chunk); // o 1º substitui o texto selecionado (nome do arquivo)
+          await sleep(HUMAN ? rnd(140, 420) * (chunk === '\n' ? 2.5 : 1) : 30);
+          if (HUMAN && Math.random() < 0.08) await human(500, 1400);
+        }
+      },
+    },
+    {
+      name: 'digitação (comando de inserir texto do navegador)',
+      async run(ed, caption) {
+        selectAllKeyboard(ed);
+        await human(250, 500);
+        for (const chunk of chunksOf(caption)) {
+          document.execCommand('insertText', false, chunk);
+          await sleep(HUMAN ? rnd(140, 420) : 30);
+        }
+      },
+    },
+  ];
+
   async function writeCaption(caption) {
     const ed = await waitFor(findCaptionEditor, { timeout: 180000, what: 'campo de legenda' });
-    logAct(`campo de legenda: ${describe(ed)} · texto atual: "${(ed.innerText || '').trim().slice(0, 80)}"`);
+    const original = (ed.innerText || '').trim();
+    logAct(`campo de legenda: ${describe(ed)} · texto atual: "${original.slice(0, 80)}"`);
     await human(800, 1500);
     await click(ed);
-    // seleciona o texto atual (o TikTok preenche com o nome do arquivo); a 1ª colagem substitui tudo
-    selectAllIn(ed);
     await human(300, 700);
-    if (!HUMAN) {
-      logAct(`⌨ colando a legenda (${caption.length} caracteres)`);
-      pasteText(ed, caption);
-      await sleep(800);
-    } else {
-      // escreve em pedaços de 1 a 3 palavras, com pausas de quem está digitando
-      logAct(`⌨ escrevendo a legenda em ritmo humano (${caption.length} caracteres)`);
-      const parts = caption.match(/\n+|[^\s]+[ \t]*/g) || [caption];
-      let i = 0;
-      let first = true;
-      while (i < parts.length) {
-        const n = parts[i].startsWith('\n') ? 1 : Math.min(parts.length - i, Math.round(rnd(1, 3)));
-        const chunk = parts.slice(i, i + n).join('');
-        if (!first) caretToEnd(ed);
-        pasteText(ed, chunk);
-        first = false;
-        i += n;
-        await sleep(rnd(140, 420) * (chunk.includes('\n') ? 2.5 : 1));
-        if (Math.random() < 0.08) await human(500, 1400); // pausa para "pensar"
-      }
-      await sleep(900);
+    for (const st of CAPTION_STRATEGIES) {
+      logAct(`⌨ escrevendo a legenda por ${st.name} (${caption.length} caracteres${HUMAN ? ', em ritmo humano' : ''})`);
+      await click(ed, { raw: true });
+      await st.run(ed, caption);
+      await sleep(1200);
+      const ok = captionOk(ed, caption, original);
+      logAct(`legenda no campo: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}" → ${ok ? '✓ certa' : '✗ não ficou certa'}`);
+      if (ok) { writtenCaption = { caption, original }; return; }
+      // limpa o campo antes de tentar a próxima forma
+      selectAllKeyboard(ed);
+      typeEvent(ed, ' ');
+      await sleep(600);
     }
-    const probe = norm(caption.split('\n')[0]).slice(0, 25);
-    logAct(`legenda no campo: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 140)}"`);
-    if (!editorText(ed).includes(probe)) throw new Error('a legenda não ficou no campo (o editor não aceitou o texto)');
+    throw new Error(`não consegui escrever a legenda no campo do TikTok (o campo ficou: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 100)}"). Não publiquei para não sair com a descrição errada.`);
+  }
+
+  // Antes de publicar, confere de novo que a legenda continua certa no campo.
+  function checkCaptionBeforePublish() {
+    if (!writtenCaption) return;
+    const ed = findCaptionEditor();
+    if (!ed) return;
+    if (!captionOk(ed, writtenCaption.caption, writtenCaption.original)) {
+      throw new Error(`a legenda mudou antes de publicar (o campo está: "${(ed.innerText || '').replace(/\s+/g, ' ').slice(0, 100)}"). Não publiquei.`);
+    }
+    logAct('✓ legenda conferida antes de publicar');
   }
 
   function findPostButton() {
@@ -922,6 +989,7 @@
     actLog = [];
     pendingLog = [];
     linkedProduct = null;
+    writtenCaption = null;
     clickedPublish = false;
     aborted = false;
     pageError = null;
@@ -947,6 +1015,7 @@
         report('job-result', { jobId: job.id, ok: true, step: 'Teste concluído (não publicado)', log: fmtLog(), linkedProduct });
         return;
       }
+      checkCaptionBeforePublish();
       await step('Publicando', () => publish());
       logAct('✅ publicado');
       report('job-result', { jobId: job.id, ok: true, step: 'Publicado', url: location.href, log: fmtLog(), linkedProduct });

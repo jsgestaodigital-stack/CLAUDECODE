@@ -136,25 +136,38 @@
     R.fileName = f.name; R.fileSize = f.size; R.fileType = f.type;
     f.arrayBuffer().then((b) => { R.firstByte = new Uint8Array(b)[0]; R.lastByte = new Uint8Array(b)[b.byteLength - 1]; });
     $('start').hidden = true; $('editor').hidden = false;
-    $('cap').textContent = f.name.replace(/\.\w+$/, '');
+    capState = f.name.replace(/\.\w+$/, '');
+    renderCap();
     let p = 0;
     const t = setInterval(() => {
       p += Q.has('slow') ? 1 : 20; $('pct').textContent = p + '%';
       if (p >= 100) { clearInterval(t); $('status').textContent = 'Enviado'; $('post').disabled = false; }
     }, 400);
   });
-  // como o editor real (Draft.js): colar substitui o texto selecionado; senão, insere no fim
-  $('cap').addEventListener('paste', (e) => {
+  // Editor como o do TikTok (Draft.js): o texto PUBLICADO é o "estado" do editor, não o que está na tela.
+  // Digitação (evento textInput, que o Chrome dispara no execCommand insertText) atualiza o estado.
+  // Colar com um evento falso só mexe na tela — foi o que fez o TikTok publicar só o nome do arquivo.
+  let capState = '';
+  function renderCap() {
+    $('cap').textContent = capState;
+    const r = document.createRange(); r.selectNodeContents($('cap')); r.collapse(false);
+    const sel = getSelection(); if (document.activeElement === $('cap')) { sel.removeAllRanges(); sel.addRange(r); }
+  }
+  $('cap').addEventListener('textInput', (e) => {
     e.preventDefault();
-    const text = e.clipboardData.getData('text/plain');
     const sel = getSelection();
     const all = sel.rangeCount && sel.toString() && sel.toString() === $('cap').textContent;
-    $('cap').textContent = (all ? '' : $('cap').textContent) + text;
-    R.pastes = (R.pastes || 0) + 1;
-    R.events.push(all ? 'paste-replace' : 'paste');
-    if (Q.has('crash') && $('cap').textContent.includes('#')) {
+    capState = (all ? '' : capState) + e.data;
+    renderCap();
+    R.events.push(all ? 'type-replace' : 'type');
+    if (Q.has('crash') && capState.includes('#')) {
       setTimeout(() => { document.body.innerHTML = '<div style="text-align:center;padding:80px"><div style="font-size:80px">🤖</div><h2>Algo deu errado</h2><p>Tente novamente mais tarde.</p></div>'; }, 300);
     }
+  });
+  $('cap').addEventListener('paste', (e) => {
+    e.preventDefault();
+    $('cap').textContent += e.clipboardData.getData('text/plain'); // só na tela
+    R.events.push('paste-screen-only');
   });
   document.addEventListener('beforeinput', (e) => { if (e.target === $('cap')) R.events.push('beforeinput:' + e.inputType); }, true);
 
@@ -222,8 +235,8 @@
   $('disc').addEventListener('change', () => { $('discOpts').hidden = !$('disc').checked; $('discWrap').style.background = $('disc').checked ? '#25f4ee' : '#ccc'; });
   $('post').onclick = () => { if (!$('post').disabled) $('confirm').hidden = false; };
   $('postNow').onclick = () => {
-    if (Q.has('noconfirm')) { R.posted = true; R.caption = $('cap').innerText; $('confirm').hidden = true; return; }
-    R.caption = $('cap').innerText;
+    if (Q.has('noconfirm')) { R.posted = true; R.caption = capState; $('confirm').hidden = true; return; }
+    R.caption = capState;
     R.branded = $('branded').checked;
     R.own = $('own').checked;
     R.disclose = String($('disc').checked);

@@ -217,7 +217,7 @@ async function main() {
   assert(h.status === 'posted', `publicado: ${h.video}`);
   let res = await tt.evaluate(() => window.__result);
   assert(res.events.includes('draft-discarded'), 'descartou o aviso de rascunho');
-  assert(res.events.includes('paste-replace') && !res.events.some((e) => e.startsWith('beforeinput:delete')), 'legenda substituiu o nome do arquivo sem apagar o editor "por fora"');
+  assert(res.events.includes('type-replace') && !res.events.includes('paste-screen-only'), 'legenda digitada (registrada pelo editor) substituindo o nome do arquivo');
   assert(!/\.mp4|v01/.test(res.caption), 'o nome do arquivo não ficou na legenda');
   assert(res.fileType === 'video/mp4', 'tipo video/mp4');
   const prodName = { fone: 'Fone Bluetooth X', escova: 'Escova secadora', kit: 'Kit ambiguo' }[h.video.split('-')[0]];
@@ -363,7 +363,8 @@ async function main() {
   res = await tt.evaluate(() => window.__result);
   if (h.status !== 'dry-run') console.log(JSON.stringify({ ...h, shot: !!h.shot }, null, 2));
   assert(h.status === 'dry-run', `teste em modo humano concluído (${Math.round(h.durationMs / 1000)}s)`);
-  assert(res.pastes >= 5, `legenda escrita em ${res.pastes} pedaços`);
+  const typed = res.events.filter((e) => e.startsWith('type')).length;
+  assert(typed >= 5, `legenda digitada em ${typed} pedaços`);
   assert(h.log.some((l) => /🖱 clicando em/.test(l)) && h.log.some((l) => /▶ Vinculando/.test(l)) && h.log.length > 20, `registro detalhado (${h.log.length} linhas)`);
   assert(h.shot && h.shot.startsWith('data:image/jpeg'), 'captura de tela salva no teste');
   await cmd('save-settings', { settings: { speed: 'normal' } });

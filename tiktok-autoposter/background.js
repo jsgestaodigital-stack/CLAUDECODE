@@ -324,7 +324,7 @@ async function tick() {
 }
 
 // ---------- execução de uma postagem ----------
-async function startJob(state, { dryRun, videoPath } = {}) {
+async function startJob(state, { dryRun, videoPath, manual } = {}) {
   const rt = state.runtime;
   if (rt.currentJob) return { ok: false, error: 'Já existe uma postagem em andamento.' };
 
@@ -427,6 +427,7 @@ async function startJob(state, { dryRun, videoPath } = {}) {
     log: [],
     dryRun: !!dryRun,
     attempt,
+    manual: !!manual,
     startedAt: Date.now(),
     lastProgressAt: Date.now(),
     step: 'Abrindo o TikTok Studio',
@@ -444,7 +445,8 @@ async function startJob(state, { dryRun, videoPath } = {}) {
   log('start job', job.path, dryRun ? '(teste)' : '');
 
   try {
-    const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active: !!(state.settings.foregroundTab || dryRun) });
+    // testes e "Postar agora" abrem na frente (para você acompanhar); os automáticos seguem a configuração
+    const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active: !!(state.settings.foregroundTab || dryRun || videoPath || job.manual) });
     job.tabId = tab.id;
     rt.currentJob = job;
     await save({ runtime: rt });
@@ -838,7 +840,7 @@ async function command(name, p) {
       return { ok: true, products: Object.keys(m.state.catalog || {}).length };
     }
     case 'post-now':
-      return startJob(state, { dryRun: false, videoPath: p.path });
+      return startJob(state, { dryRun: false, videoPath: p.path, manual: true });
     case 'sync-showcase':
       return startSync(state);
     case 'dry-run':
