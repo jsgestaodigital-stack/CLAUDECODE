@@ -2,7 +2,7 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS, mergeLabels } from './lib/defaults.js';
 import {
   computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked, linkKey,
-  migrate, productKeyOf, itemOf, newCatalogKey,
+  migrate, productKeyOf, itemOf, newCatalogKey, hash,
 } from './lib/scheduler.js';
 import { generateCaption, rememberCaption } from './lib/captions.js';
 import { mergeShowcase } from './lib/showcase.js';
@@ -171,7 +171,67 @@ async function rescan(state) {
   state.folders = merged.folders;
   state.runtime.folderName = res.folderName;
   state.runtime.lastScanAt = Date.now();
-  return { ok: true, added: merged.added, missing: merged.missing, total: res.files.length };
+  const restored = await maybeRestore(state);
+  return { ok: true, added: merged.added, missing: merged.missing, total: res.files.length, restored };
+}
+
+// ---------- cópia de segurança na pasta de vídeos ----------
+// Assim uma instalação nova da extensão (ou outro computador) recupera tudo ao escolher a pasta.
+function backupPayload(state) {
+  const videos = {};
+  for (const [p, v] of Object.entries(state.videos)) {
+    if (v.status !== 'pending' || v.catalogKey) videos[p] = { status: v.status, postedAt: v.postedAt || null, catalogKey: v.catalogKey || null };
+  }
+  const folders = {};
+  for (const [k, f] of Object.entries(state.folders)) folders[k] = { catalogKey: f.catalogKey || null };
+  return { app: 'autoposter-tiktok-shop', kind: 'auto-backup', version: 3, settings: state.settings, catalog: state.catalog, folders, videos };
+}
+
+async function maybeBackup(state) {
+  if (!state.runtime.folderName || !Object.keys(state.catalog || {}).length) return;
+  const payload = backupPayload(state);
+  const sig = String(hash(JSON.stringify(payload)));
+  if (sig === state.runtime.backupSig) return;
+  try {
+    const r = await offscreen('write-backup', { json: JSON.stringify({ ...payload, savedAt: new Date().toISOString() }, null, 1) });
+    if (r.ok) {
+      state.runtime.backupSig = sig;
+      state.runtime.backupAt = Date.now();
+      state.runtime.backupError = null;
+    } else {
+      state.runtime.backupError = r.code === 'NO_WRITE' ? 'no-write' : r.error;
+    }
+    await save({ runtime: state.runtime });
+  } catch (e) {
+    log('backup', e);
+  }
+}
+
+// Instalação nova (catálogo vazio) + cópia de segurança na pasta → restaura tudo.
+async function maybeRestore(state) {
+  if (Object.keys(state.catalog || {}).length) return false;
+  let r;
+  try { r = await offscreen('read-backup'); } catch (_) { return false; }
+  const b = r?.data;
+  if (!b || b.app !== 'autoposter-tiktok-shop' || !b.catalog || !Object.keys(b.catalog).length) return false;
+  state.catalog = b.catalog;
+  if (b.settings) {
+    state.settings = { ...DEFAULT_SETTINGS, ...b.settings };
+    state.settings.labels = mergeLabels(state.settings.labels);
+  }
+  for (const [k, f] of Object.entries(b.folders || {})) {
+    if (state.folders[k] && f.catalogKey && state.catalog[f.catalogKey]) state.folders[k] = { ...state.folders[k], catalogKey: f.catalogKey };
+  }
+  for (const [p, v] of Object.entries(b.videos || {})) {
+    const cur = state.videos[p];
+    if (!cur) continue;
+    state.videos[p] = { ...cur, status: cur.status === 'missing' ? 'missing' : v.status || cur.status, postedAt: v.postedAt || cur.postedAt, ...(v.catalogKey && state.catalog[v.catalogKey] ? { catalogKey: v.catalogKey } : {}) };
+  }
+  state.runtime.restoredAt = Date.now();
+  state.runtime.backupSig = null;
+  await save({ settings: state.settings });
+  log('configurações restauradas da cópia de segurança da pasta');
+  return true;
 }
 
 // ---------- agendamento ----------
@@ -224,6 +284,7 @@ async function tick() {
   const rt = state.runtime;
   const now = Date.now();
   syncPower(rt, state.settings);
+  if (!rt.currentJob) await maybeBackup(state);
   await maybeDailySummary(state);
 
   if (rt.currentJob) {
@@ -702,7 +763,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'cmd') {
-    locked(() => command(msg.name, msg.payload || {}))
+    locked(async () => {
+      const r = await command(msg.name, msg.payload || {});
+      // depois de qualquer mudança, atualiza a cópia de segurança na pasta (só grava se algo mudou)
+      if (!['ping', 'export', 'inspect', 'telegram-test', 'telegram-find-chat'].includes(msg.name)) await maybeBackup(await load());
+      return r;
+    })
       .then((r) => sendResponse(r || { ok: true }))
       .catch((e) => sendResponse({ ok: false, error: e.message || String(e) }));
     return true;

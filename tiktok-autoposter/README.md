@@ -14,13 +14,19 @@ Tudo acontece no seu próprio Chrome, já logado, como se fosse você clicando. 
 
 ## Instalação (Windows)
 
-1. Baixe esta pasta `tiktok-autoposter` para o computador (por exemplo `C:\AutoPoster\tiktok-autoposter`).
-2. No Chrome, abra `chrome://extensions`.
-3. Ligue o **Modo do desenvolvedor** (canto superior direito).
-4. Clique em **Carregar sem compactação** e escolha a pasta `tiktok-autoposter`.
-5. Fixe o ícone da extensão na barra (ícone de quebra-cabeça → alfinete) e clique nele para abrir o painel.
+1. Descompacte o zip numa pasta **fixa**, por exemplo `C:\AutoPoster`. Dentro dela deve estar o `manifest.json`.
+2. No Chrome, abra `chrome://extensions` e ligue o **Modo do desenvolvedor** (canto superior direito).
+3. Clique em **Carregar sem compactação** e escolha essa pasta.
+4. Fixe o ícone da extensão na barra (ícone de quebra-cabeça → alfinete) e clique nele para abrir o painel.
 
-> Para atualizar depois: substitua os arquivos da pasta e clique em ↻ (recarregar) no cartão da extensão em `chrome://extensions`.
+## Atualizar para uma versão nova (sem perder nada)
+
+1. Descompacte o zip novo **por cima da mesma pasta** (`C:\AutoPoster`), substituindo os arquivos.
+2. Em `chrome://extensions`, clique em **↻ (recarregar)** no cartão do AutoPoster.
+
+**Não remova** a extensão para instalar de novo: ao remover, o Chrome apaga os dados dela. Mesmo assim, nada se perde:
+- a extensão tem **identidade fixa** (o `manifest.json` traz uma chave própria);
+- ela grava uma **cópia de segurança automática** em `_autoposter-config.json`, dentro da sua pasta de vídeos. Ao escolher a pasta numa instalação nova, ela **recupera tudo sozinha**: produtos, diferenciais, nome no carrinho, pastas ligadas, vídeos já postados e configurações.
 
 ## Organização dos vídeos
 

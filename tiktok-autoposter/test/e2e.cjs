@@ -586,6 +586,32 @@ async function main() {
   assert((await dash.evaluate(() => document.documentElement.dataset.theme)) === 'light', 'tema lembrado após recarregar');
   await dash.click('[data-theme-set="dark"]');
 
+  console.log('15) Cópia de segurança na pasta → instalação nova recupera tudo');
+  await cmd('catalog-save', { key: FONE, data: { benefits: 'bateria de 30 horas\ncancelamento de ruído\nbacked-up', productLabel: 'Fone Pro Max' } });
+  await sleep(800);
+  const backup = await dash.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const dir = await root.getDirectoryHandle('Videos TikTok');
+    const fh = await dir.getFileHandle('_autoposter-config.json');
+    return JSON.parse(await (await fh.getFile()).text());
+  });
+  assert(backup.catalog[FONE].benefits.includes('backed-up') && backup.catalog[FONE].productLabel === 'Fone Pro Max', 'arquivo _autoposter-config.json gravado na pasta com os diferenciais e o nome do carrinho');
+  const before15 = await get(['catalog', 'folders', 'videos', 'settings']);
+  const postedBefore = Object.values(before15.videos).filter((v) => v.status === 'posted').map((v) => v.path).sort();
+  await cmd('reset-all'); // simula instalar a extensão do zero (tudo apagado)
+  assert(!Object.keys((await get(['catalog'])).catalog || {}).length, 'dados apagados (instalação nova)');
+  await dash.reload();
+  await dash.waitForSelector('#btnToggle');
+  r = await cmd('rescan');
+  const after15 = await get(['catalog', 'folders', 'videos', 'settings']);
+  assert(r.ok && r.restored, 'ao ler a pasta, as configurações foram recuperadas da cópia de segurança');
+  assert(after15.catalog[FONE].benefits.includes('backed-up') && after15.catalog[FONE].productLabel === 'Fone Pro Max', 'produto recuperado com diferenciais e nome do carrinho');
+  assert(Object.keys(after15.catalog).length === Object.keys(before15.catalog).length, `catálogo inteiro recuperado (${Object.keys(after15.catalog).length} produtos)`);
+  assert(after15.folders['fone-bluetooth-x'].catalogKey === FONE, 'ligação pasta → produto recuperada');
+  const postedAfter = Object.values(after15.videos).filter((v) => v.status === 'posted').map((v) => v.path).sort();
+  assert(JSON.stringify(postedAfter) === JSON.stringify(postedBefore), `vídeos já postados continuam marcados (${postedAfter.length}) — nada é repetido`);
+  assert(after15.settings.telegramChatId === before15.settings.telegramChatId && after15.settings.intervalMinutes === before15.settings.intervalMinutes, 'configurações recuperadas');
+
   assert(errors.length === 0, 'sem erros de JavaScript' + (errors.length ? ': ' + errors.join(' | ') : ''));
   console.log(`\nTODOS OS ${passed} TESTES PASSARAM`);
   await ctx.close();

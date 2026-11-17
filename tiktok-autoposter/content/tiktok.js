@@ -187,8 +187,8 @@
 
   // Clique "humano": rola até o elemento, leva o mouse até ele em vários passos, para em cima
   // um instante, pressiona, solta e só então clica.
-  async function click(el) {
-    el = clickable(el);
+  async function click(el, { raw = false } = {}) {
+    if (!raw) el = clickable(el);
     const r0 = el.getBoundingClientRect();
     if (r0.top < 60 || r0.bottom > innerHeight - 60) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: HUMAN ? 'smooth' : 'auto' });
@@ -815,6 +815,36 @@
   }
   const cs0 = (c) => c.matches('input[type="file"]');
 
+  // Estado real de um interruptor/caixa: o <input> interno manda; depois aria-checked; depois a classe.
+  function controlState(ctrl) {
+    if (!ctrl) return false;
+    const all = [ctrl, ...ctrl.querySelectorAll('input[type="checkbox"], input[type="radio"], [role="switch"], [role="checkbox"], [aria-checked]')];
+    const input = all.find((c) => c.matches('input'));
+    if (input) return input.checked;
+    for (const c of all) {
+      const a = c.getAttribute('aria-checked') ?? c.getAttribute('aria-pressed');
+      if (a != null) return a === 'true';
+    }
+    return all.some((c) => /(^|[\s_-])(checked|is-checked|active|on)(\b|$)/i.test(String(c.className?.baseVal ?? c.className ?? '')));
+  }
+
+  // Liga um interruptor/caixa de verdade: tenta o <input> interno, o elemento com papel de
+  // interruptor, a moldura, o bloco em volta e por fim o próprio texto — conferindo após cada clique.
+  async function ensureChecked(ctrl, textEl, what) {
+    if (controlState(ctrl)) { logAct(`✓ ${what} já estava ligado`); return; }
+    logAct(`controle de ${what}: ${(ctrl.parentElement || ctrl).outerHTML.replace(/\s+/g, ' ').slice(0, 500)}`);
+    const inner = ctrl.matches('input') ? ctrl : ctrl.querySelector('input[type="checkbox"], input[type="radio"]');
+    const roleEl = ctrl.matches('[role="switch"], [role="checkbox"]') ? ctrl : ctrl.querySelector('[role="switch"], [role="checkbox"]');
+    const tries = [...new Set([inner, roleEl, ctrl, ctrl.closest('label'), ctrl.parentElement, textEl].filter(Boolean))];
+    for (const t of tries) {
+      logAct(`tentando ligar ${what}: ${describe(t)}`);
+      if (t.matches('input')) { t.focus(); t.click(); } else await click(t, { raw: true });
+      await human(700, 1200);
+      if (controlState(ctrl)) { logAct(`✓ ${what} ligado`); return; }
+    }
+    throw new Error(`${what} não ficou ligado (tentei ${tries.length} formas de clicar)`);
+  }
+
   async function markBrandedContent() {
     let disclose = findByText(L.disclose)[0];
     if (!disclose) {
@@ -826,27 +856,26 @@
       }
       disclose = await waitFor(() => findByText(L.disclose)[0], { timeout: 10000, what: 'opção "Divulgar conteúdo do vídeo"' });
     }
-    disclose.scrollIntoView({ block: 'center' });
+    disclose.scrollIntoView({ block: 'center', behavior: HUMAN ? 'smooth' : 'auto' });
+    await human(500, 900);
     const toggle = controlNear(disclose);
-    if (!toggle) throw new Error('não achei o botão liga/desliga de "Divulgar conteúdo do vídeo"');
-    if (!isOn(toggle)) {
-      await click(toggle);
-      await human(1000, 1600);
-      await dismissPopups();
-    }
-    if (!isOn(toggle)) throw new Error('"Divulgar conteúdo do vídeo" não ficou ligado');
+    if (!toggle) throw new Error('não achei o botão liga/desliga de "Divulga o conteúdo da publicação"');
+    await ensureChecked(toggle, disclose, '"Divulga o conteúdo da publicação"');
+    await human(600, 1000);
+    await dismissPopups();
     const branded = await waitFor(() => findByText(L.brandedContent)[0], { timeout: 10000, what: 'opção "Conteúdo de marca"' });
     const box = controlNear(branded);
     if (!box) throw new Error('não achei a caixa de "Conteúdo de marca"');
-    if (!isOn(box)) await click(box);
-    await human(1000, 1600);
+    await ensureChecked(box, branded, '"Conteúdo de marca"');
+    await human(800, 1400);
     // Pode abrir um aviso sobre a política de conteúdo de marca — confirma
     const d = topDialog();
     if (d && /marca|brand/.test(norm(d.innerText))) {
       const ok = findByText(L.dismiss.concat(L.confirmPost), { within: d, exact: true })[0];
       if (ok) { await click(ok); await human(); }
     }
-    if (!isOn(box)) throw new Error('"Conteúdo de marca" não ficou marcado');
+    if (!controlState(box)) throw new Error('"Conteúdo de marca" não ficou marcado');
+    if (!controlState(toggle)) throw new Error('"Divulga o conteúdo da publicação" desligou sozinho');
     logAct('✓ "Conteúdo de marca" marcado');
   }
 

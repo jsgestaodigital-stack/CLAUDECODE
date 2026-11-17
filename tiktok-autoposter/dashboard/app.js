@@ -11,6 +11,7 @@ const icon = (name) => `<svg class="i"><use href="#i-${name}"/></svg>`;
 
 let S = { settings: DEFAULT_SETTINGS, catalog: {}, folders: {}, videos: {}, history: [], runtime: {} };
 let folderPerm = 'none';
+let writePerm = 'none';
 let folderName = null;
 let view = 'overview';
 let settingsDirty = false;
@@ -63,6 +64,7 @@ async function refreshFolder() {
     const h = await getRootHandle();
     folderName = h?.name || null;
     folderPerm = h ? await permissionState(h) : 'none';
+    writePerm = h ? await permissionState(h, false, 'readwrite') : 'none';
   } catch (_) {
     folderPerm = 'none';
   }
@@ -205,6 +207,8 @@ function renderBanner() {
   let html = '';
   if (folderName && folderPerm !== 'granted') {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>O Chrome precisa de permissão para ler a pasta “${esc(folderName)}”</b><span class="muted small">Sem isso as postagens param. Clique em Reautorizar e, se aparecer, escolha “Permitir em todas as visitas”.</span></div><button class="btn primary small" data-act="reauth">Reautorizar pasta</button></div>`;
+  } else if (folderName && folderPerm === 'granted' && writePerm !== 'granted') {
+    html = `<div class="banner warn">${icon('shield')}<div class="grow"><b>Ative a cópia de segurança automática</b><span class="muted small">Com a permissão de edição da pasta, a extensão grava suas configurações e produtos no arquivo “_autoposter-config.json” dentro da pasta de vídeos. Assim, ao instalar uma versão nova, tudo volta sozinho.</span></div><button class="btn primary small" data-act="enable-backup">Ativar</button></div>`;
   } else if (!S.runtime.running && S.runtime.pausedReason === 'logged-out') {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>Pausado: o TikTok está deslogado neste Chrome</b><span class="muted small">Entre na sua conta do TikTok e depois clique em Iniciar.</span></div><a class="btn small" href="https://www.tiktok.com/login" target="_blank" rel="noopener">Entrar no TikTok</a></div>`;
   } else if (!S.runtime.running && S.runtime.consecutiveFailures >= (S.settings.pauseAfterFailures || 3)) {
@@ -269,7 +273,8 @@ function renderOverview() {
     ? `<div class="folder"><div class="folder-icon">${icon('folder')}</div><div class="grow"><b>${esc(folderName)}</b>
         <div class="muted small">${Object.keys(S.folders).length} pastas · ${files.length} vídeos · ${fmtSize(size)}</div>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">${folderPerm === 'granted' ? `<span class="pill ok">${icon('check')}Conectada</span>` : `<span class="pill bad">${icon('lock')}Sem permissão</span>`}
-        ${S.runtime.lastScanAt ? `<span class="muted small">lida às ${fmtTime(S.runtime.lastScanAt)} · relida antes de cada post</span>` : ''}</div></div></div>
+        ${S.runtime.lastScanAt ? `<span class="muted small">lida às ${fmtTime(S.runtime.lastScanAt)} · relida antes de cada post</span>` : ''}</div>
+        <div class="muted small" style="margin-top:6px">${writePerm === 'granted' ? `🛡 Cópia de segurança na pasta${S.runtime.backupAt ? `: salva às ${fmtTime(S.runtime.backupAt)}` : ' ativada'}` : '🛡 Cópia de segurança desativada (falta permissão de edição)'}</div></div></div>
        <div class="folder-actions">
         ${folderPerm !== 'granted' ? `<button class="btn primary small" data-act="reauth">${icon('lock')}Reautorizar</button>` : ''}
         <button class="btn small" data-act="rescan">${icon('refresh')}Ler pasta de novo</button>
@@ -688,12 +693,13 @@ async function deleteProduct(key) {
 // ---------- pasta ----------
 async function pickFolder() {
   try {
-    const h = await window.showDirectoryPicker({ id: 'ttap-videos', mode: 'read' });
+    // "readwrite": além de ler os vídeos, grava a cópia de segurança das configurações na pasta
+    const h = await window.showDirectoryPicker({ id: 'ttap-videos', mode: 'readwrite' });
     await saveRootHandle(h);
     await refreshFolder();
     const r = await send('rescan');
     await loadState();
-    if (r.ok) toast(`Pasta conectada: ${r.total} vídeos em ${Object.keys(S.folders).length} pastas`);
+    if (r.ok) toast(r.restored ? `Pasta conectada e configurações recuperadas da cópia de segurança ✓ (${Object.keys(S.catalog).length} produtos)` : `Pasta conectada: ${r.total} vídeos em ${Object.keys(S.folders).length} pastas`);
     render();
   } catch (e) {
     if (e.name !== 'AbortError') toast('Não foi possível abrir a pasta: ' + e.message, true);
@@ -702,7 +708,10 @@ async function pickFolder() {
 async function reauth() {
   const h = await getRootHandle();
   if (!h) return pickFolder();
-  try { folderPerm = await permissionState(h, true); } catch (e) { toast(e.message, true); }
+  try {
+    writePerm = await permissionState(h, true, 'readwrite');
+    folderPerm = writePerm === 'granted' ? 'granted' : await permissionState(h, true);
+  } catch (e) { toast(e.message, true); }
   if (folderPerm === 'granted') {
     const r = await send('rescan');
     if (r.ok) toast(`Acesso liberado. ${r.total} vídeos encontrados.`);
@@ -772,6 +781,13 @@ document.addEventListener('click', async (e) => {
   if (t.dataset.act === 'pick') return pickFolder();
   if (t.dataset.act === 'reauth') return reauth();
   if (t.dataset.act === 'rescan') return rescan();
+  if (t.dataset.act === 'enable-backup') {
+    const h = await getRootHandle();
+    if (!h) return pickFolder();
+    try { writePerm = await permissionState(h, true, 'readwrite'); } catch (e) { toast(e.message, true); }
+    if (writePerm === 'granted') { await send('ping'); toast('Cópia de segurança ativada ✓'); } else toast('Sem a permissão de edição a cópia de segurança não é gravada.', true);
+    return render();
+  }
   if (t.dataset.edit) return openProduct(t.dataset.edit);
   if (t.dataset.testProd) {
     const v = previewQueue({ ...S, runtime: { ...S.runtime, lastProduct: null } }, 200).find((x) => x.product === t.dataset.testProd);

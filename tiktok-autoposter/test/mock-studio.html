@@ -49,11 +49,17 @@
     <p>Permitir aos utilizadores:</p>
     <label><input type="checkbox" checked> <span>Comentário</span></label>
     <label><input type="checkbox" checked> <span>Reutilização de conteúdo</span></label>
-    <div class="row"><span>Divulga o conteúdo da publicação</span> <div role="switch" aria-checked="false" id="disc" tabindex="0"></div></div>
+    <!-- como o TikTok (componentes "TUX"): o <input> real fica invisível dentro de uma moldura;
+         clicar na moldura ou no texto NÃO liga nada — só o <input> -->
+    <div class="row"><span>Divulga o conteúdo da publicação</span>
+      <div class="TUXSwitch" id="discWrap" style="display:inline-block;position:relative;width:34px;height:18px;background:#ccc;border-radius:9px">
+        <input type="checkbox" id="disc" style="opacity:0;position:absolute;inset:0;margin:0;width:100%;height:100%">
+      </div>
+    </div>
     <p>Diz aos outros que esta publicação promove uma marca, um produto ou um serviço.</p>
     <div id="discOpts" hidden>
-      <label><input type="checkbox" id="own"> <span>A tua marca</span></label>
-      <label><input type="checkbox" id="branded"> <span>Conteúdo de marca</span></label>
+      <div class="TUXCheckbox" style="position:relative"><input type="checkbox" id="own" style="opacity:0;position:absolute;left:0;width:16px;height:16px;margin:0"><span style="margin-left:22px">A tua marca</span></div>
+      <div class="TUXCheckbox" style="position:relative"><input type="checkbox" id="branded" style="opacity:0;position:absolute;left:0;width:16px;height:16px;margin:0"><span style="margin-left:22px">Conteúdo de marca</span></div>
     </div>
   </div>
   <button data-e2e="post_video_button" id="post" disabled>Publicar</button>
@@ -213,18 +219,14 @@
   $('keepDraft').onclick = () => { R.events.push('draft-kept'); };
   $('more').onclick = () => { $('advanced').hidden = false; $('more').firstElementChild.textContent = 'Mostrar menos'; R.events.push('show-more'); };
   $('visibility').onclick = () => { $('visMenu').hidden = !$('visMenu').hidden; R.events.push('visibility-menu'); };
-  $('disc').onclick = () => {
-    const on = $('disc').getAttribute('aria-checked') !== 'true';
-    $('disc').setAttribute('aria-checked', String(on));
-    $('discOpts').hidden = !on;
-  };
+  $('disc').addEventListener('change', () => { $('discOpts').hidden = !$('disc').checked; $('discWrap').style.background = $('disc').checked ? '#25f4ee' : '#ccc'; });
   $('post').onclick = () => { if (!$('post').disabled) $('confirm').hidden = false; };
   $('postNow').onclick = () => {
     if (Q.has('noconfirm')) { R.posted = true; R.caption = $('cap').innerText; $('confirm').hidden = true; return; }
     R.caption = $('cap').innerText;
     R.branded = $('branded').checked;
     R.own = $('own').checked;
-    R.disclose = $('disc').getAttribute('aria-checked');
+    R.disclose = String($('disc').checked);
     R.posted = true;
     $('confirm').hidden = true;
     history.pushState({}, '', '/tiktokstudio/content');

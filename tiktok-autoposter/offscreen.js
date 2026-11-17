@@ -1,6 +1,6 @@
 // Documento invisível que lê os vídeos da pasta local e os entrega em pedaços
 // para o script que roda dentro da página do TikTok Studio.
-import { getRootHandle, permissionState, scanFolder, resolveFile, readSidecar } from './lib/fsaccess.js';
+import { getRootHandle, permissionState, scanFolder, resolveFile, readSidecar, writeBackup, readBackup } from './lib/fsaccess.js';
 
 async function root() {
   const h = await getRootHandle();
@@ -37,6 +37,17 @@ const handlers = {
     const f = await resolveFile(await root(), path);
     const buf = await f.slice(offset, offset + length).arrayBuffer();
     return { b64: toBase64(buf), bytes: buf.byteLength };
+  },
+  async 'write-backup'({ json }) {
+    const h = await root();
+    if ((await permissionState(h, false, 'readwrite')) !== 'granted') {
+      throw Object.assign(new Error('Sem permissão de edição na pasta para salvar a cópia de segurança.'), { code: 'NO_WRITE' });
+    }
+    await writeBackup(h, json);
+    return { saved: true };
+  },
+  async 'read-backup'() {
+    return { data: await readBackup(await root()) };
   },
   async 'read-sidecar'({ path }) {
     return { text: await readSidecar(await root(), path) };

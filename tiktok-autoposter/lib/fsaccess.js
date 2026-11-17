@@ -28,9 +28,11 @@ async function tx(mode, fn) {
 export const saveRootHandle = (handle) => tx('readwrite', (s) => s.put(handle, KEY));
 export const getRootHandle = () => tx('readonly', (s) => s.get(KEY));
 
-export async function permissionState(handle, request = false) {
+export const BACKUP_FILE = '_autoposter-config.json';
+
+export async function permissionState(handle, request = false, mode = 'read') {
   if (!handle) return 'none';
-  const opts = { mode: 'read' };
+  const opts = { mode };
   let state = await handle.queryPermission(opts);
   if (state !== 'granted' && request) state = await handle.requestPermission(opts);
   return state;
@@ -69,6 +71,22 @@ async function walk(dir, product, prefix, out) {
       lastModified: file.lastModified,
       hasTxt: txts.has(name.replace(VIDEO_EXT, '').toLowerCase()),
     });
+  }
+}
+
+// Cópia de segurança das configurações na raiz da pasta de vídeos (precisa de permissão de edição).
+export async function writeBackup(root, json) {
+  const fh = await root.getFileHandle(BACKUP_FILE, { create: true });
+  const w = await fh.createWritable();
+  await w.write(json);
+  await w.close();
+}
+export async function readBackup(root) {
+  try {
+    const fh = await root.getFileHandle(BACKUP_FILE);
+    return JSON.parse(await (await fh.getFile()).text());
+  } catch (_) {
+    return null;
   }
 }
 
