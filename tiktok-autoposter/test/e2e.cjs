@@ -598,13 +598,15 @@ async function main() {
   assert(backup.catalog[FONE].benefits.includes('backed-up') && backup.catalog[FONE].productLabel === 'Fone Pro Max', 'arquivo _autoposter-config.json gravado na pasta com os diferenciais e o nome do carrinho');
   const before15 = await get(['catalog', 'folders', 'videos', 'settings']);
   const postedBefore = Object.values(before15.videos).filter((v) => v.status === 'posted').map((v) => v.path).sort();
+  const tReset = Date.now();
   await cmd('reset-all'); // simula instalar a extensão do zero (tudo apagado)
   assert(!Object.keys((await get(['catalog'])).catalog || {}).length, 'dados apagados (instalação nova)');
   await dash.reload();
   await dash.waitForSelector('#btnToggle');
-  r = await cmd('rescan');
-  const after15 = await get(['catalog', 'folders', 'videos', 'settings']);
-  assert(r.ok && r.restored, 'ao ler a pasta, as configurações foram recuperadas da cópia de segurança');
+  // o próprio painel relê a pasta ao abrir; espera a recuperação acontecer
+  for (let i = 0; i < 40 && !((await get(['runtime'])).runtime?.restoredAt > tReset); i++) await sleep(500);
+  const after15 = await get(['catalog', 'folders', 'videos', 'settings', 'runtime']);
+  assert(after15.runtime.restoredAt > tReset, 'ao abrir o painel e ler a pasta, as configurações foram recuperadas sozinhas da cópia de segurança');
   assert(after15.catalog[FONE].benefits.includes('backed-up') && after15.catalog[FONE].productLabel === 'Fone Pro Max', 'produto recuperado com diferenciais e nome do carrinho');
   assert(Object.keys(after15.catalog).length === Object.keys(before15.catalog).length, `catálogo inteiro recuperado (${Object.keys(after15.catalog).length} produtos)`);
   assert(after15.folders['fone-bluetooth-x'].catalogKey === FONE, 'ligação pasta → produto recuperada');
