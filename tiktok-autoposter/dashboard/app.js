@@ -149,7 +149,7 @@ function setupSteps() {
     {
       done: !!S.runtime.running,
       title: 'Iniciar',
-      text: `Um post a cada ${S.settings.intervalMinutes} min`,
+      text: `Um post a cada ${fmtMinutes(S.settings.intervalMinutes)}`,
       btn: ['start', 'Iniciar'],
     },
   ];
@@ -180,7 +180,7 @@ function renderChrome() {
 
   $('#sideDot').className = 'dot' + (busy ? ' busy' : rt.running ? ' on' : '');
   $('#sideState').textContent = busy ? 'Postando agora' : rt.running ? 'Rodando' : 'Pausado';
-  $('#sideInfo').textContent = `A cada ${S.settings.intervalMinutes} min · ${String(S.settings.activeStartHour).padStart(2, '0')}h às ${String(S.settings.activeEndHour).padStart(2, '0')}h`;
+  $('#sideInfo').textContent = `A cada ${fmtMinutes(S.settings.intervalMinutes)} · ${String(S.settings.activeStartHour).padStart(2, '0')}h às ${String(S.settings.activeEndHour).padStart(2, '0')}h`;
 
   const needs = Object.values(S.catalog).filter((p) => p.enabled !== false && !isLinkReady(p)).length;
   const pb = $('#navProdBadge');
@@ -287,7 +287,7 @@ function renderOverview() {
   const q = previewQueue(S, 6);
   const interval = Number(S.settings.intervalMinutes);
   const t = S.runtime.nextRunAt && S.runtime.running ? S.runtime.nextRunAt : null;
-  $('#intervalInfo').textContent = `a cada ${interval} min (±${S.settings.jitterMinutes})`;
+  $('#intervalInfo').textContent = `a cada ${fmtMinutes(interval)} (±${S.settings.jitterMinutes} min)`;
   $('#upcoming').innerHTML = q.length
     ? q.map((it, i) => `<li><span class="n">${i + 1}</span><span class="t">${t ? '~' + fmtTime(t + i * interval * 60000) : '—'}</span>
         <div style="min-width:0"><div class="p">${esc(nameOf(it.product) || it.product)}</div><div class="f">📁 ${esc(it.video.folder)} · ${esc(it.video.name)}</div></div></li>`).join('')
@@ -526,10 +526,34 @@ function fillSettings() {
   setIntervalSeg(s.intervalMinutes);
   settingsDirty = false;
 }
+// Intervalo digitado (5 a 1440 min). Os atalhos só preenchem o campo.
 function setIntervalSeg(v) {
-  $$('#intervalSeg button').forEach((b) => { b.classList.toggle('on', Number(b.dataset.v) === Number(v)); b.setAttribute('aria-checked', Number(b.dataset.v) === Number(v)); });
-  $('#intervalSeg').dataset.value = v;
-  $('#intervalWarn').hidden = Number(v) >= 30;
+  const f = $('#settingsForm');
+  if (v != null && Number(f.intervalMinutes.value) !== Number(v)) f.intervalMinutes.value = v;
+  updateIntervalHint();
+}
+function fmtMinutes(m) {
+  m = Number(m);
+  if (!m) return '—';
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return h ? `${h} h${r ? ` ${r} min` : ''}` : `${m} min`;
+}
+// Mostra quantos posts por dia o intervalo + horário + limite vão gerar.
+function updateIntervalHint() {
+  const f = $('#settingsForm');
+  const v = Number(f.intervalMinutes.value);
+  $$('#intervalSeg button').forEach((b) => b.classList.toggle('on', Number(b.dataset.v) === v));
+  $('#intervalWarn').hidden = !(v > 0 && v < 30);
+  if (!(v >= 5 && v <= 1440)) { $('#intervalHint').textContent = 'Digite um número entre 5 e 1440 minutos (24 horas).'; $('#intervalHint').style.color = 'var(--red)'; return; }
+  const start = Number(f.activeStartHour.value);
+  const end = Number(f.activeEndHour.value);
+  const hours = end > start ? end - start : 24 - start + end;
+  const byTime = Math.max(1, Math.floor((hours * 60) / v) + 1);
+  const max = Number(f.maxPerDay.value) || byTime;
+  const perDay = Math.min(byTime, max);
+  $('#intervalHint').style.color = '';
+  $('#intervalHint').textContent = `Um post a cada ${fmtMinutes(v)} (± a variação aleatória) · ≈ ${perDay} posts por dia${byTime > max ? ` (limitado pelo máximo de ${max})` : ''} entre ${String(start).padStart(2, '0')}h e ${String(end).padStart(2, '0')}h.`;
 }
 const clamp = (n, lo, hi, d) => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d);
 
@@ -544,8 +568,8 @@ async function saveSettings(e) {
   const d = DEFAULT_SETTINGS;
   const num = (k) => Number(f[k].value);
   const settings = {
-    intervalMinutes: Number($('#intervalSeg').dataset.value) || 60,
-    jitterMinutes: clamp(num('jitterMinutes'), 0, 20, d.jitterMinutes),
+    intervalMinutes: clamp(num('intervalMinutes'), 5, 1440, 60),
+    jitterMinutes: clamp(num("jitterMinutes"), 0, 60, d.jitterMinutes),
     maxPerDay: clamp(num('maxPerDay'), 1, 288, d.maxPerDay),
     hashtagsCount: clamp(num('hashtagsCount'), 0, 10, d.hashtagsCount),
     activeStartHour: clamp(num('activeStartHour'), 0, 23, 0),
@@ -809,7 +833,7 @@ document.addEventListener('click', async (e) => {
   if (t.dataset.markPosted) return send('set-video-status', { paths: [t.dataset.markPosted], status: 'posted' });
   if (t.closest('#queueFilter')) { ui.queueFilter = t.dataset.f; return renderQueue(); }
   if (t.closest('#histFilter')) { ui.histFilter = t.dataset.f; return renderHistory(); }
-  if (t.closest('#intervalSeg')) { settingsDirty = true; return setIntervalSeg(t.dataset.v); }
+  if (t.closest('#intervalSeg')) { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; return setIntervalSeg(t.dataset.v); }
 });
 
 $('#btnToggle').onclick = toggleRun;
@@ -828,7 +852,8 @@ $('#btnRequeueFailed').onclick = async () => {
   if (paths.length && (await send('set-video-status', { paths, status: 'pending' })).ok) toast(`${paths.length} vídeo(s) voltaram para a fila`);
 };
 $('#settingsForm').addEventListener('submit', saveSettings);
-$('#settingsForm').addEventListener('input', () => { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; });
+$('#settingsForm').addEventListener('input', () => { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; updateIntervalHint(); });
+$('#settingsForm').addEventListener('change', () => updateIntervalHint());
 $('#settingsForm').telegramEnabled.addEventListener('change', (e) => { $('#tgFields').hidden = !e.target.checked; });
 $('#btnTgFind').onclick = async () => {
   const f = $('#settingsForm');

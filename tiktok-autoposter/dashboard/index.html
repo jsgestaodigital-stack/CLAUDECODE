@@ -184,18 +184,21 @@
           <h2><svg class="i"><use href="#i-calendar"/></svg>Frequência</h2>
           <div class="field">
             <span>Postar a cada</span>
-            <div class="seg big" id="intervalSeg" role="radiogroup" aria-label="Intervalo entre posts">
-              <button type="button" data-v="5">5 min</button>
-              <button type="button" data-v="10">10 min</button>
-              <button type="button" data-v="15">15 min</button>
-              <button type="button" data-v="20">20 min</button>
-              <button type="button" data-v="30">30 min</button>
-              <button type="button" data-v="60">60 min</button>
+            <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:8px"><input type="number" name="intervalMinutes" id="intervalInput" min="5" max="1440" step="1" style="width:120px;font-size:18px;font-weight:700" aria-label="Minutos entre posts"><b>minutos</b></div>
+              <div class="seg" id="intervalSeg" aria-label="Atalhos de intervalo">
+                <button type="button" data-v="30">30 min</button>
+                <button type="button" data-v="60">1 h</button>
+                <button type="button" data-v="90">1h30</button>
+                <button type="button" data-v="120">2 h</button>
+                <button type="button" data-v="180">3 h</button>
+              </div>
             </div>
-            <small id="intervalWarn" class="warn" hidden>⚠️ Intervalos curtos aumentam muito o risco de o TikTok limitar ou bloquear a conta.</small>
+            <small id="intervalHint"></small>
+            <small id="intervalWarn" class="warn" hidden>⚠️ Intervalos curtos aumentam muito o risco de o TikTok limitar a conta ou bloquear a sua internet.</small>
           </div>
           <div class="row3">
-            <label class="field"><span>Variação aleatória (± minutos)</span><input type="number" name="jitterMinutes" min="0" max="20"><small>Evita postar sempre no mesmo minuto.</small></label>
+            <label class="field"><span>Variação aleatória (± minutos)</span><input type="number" name="jitterMinutes" min="0" max="60"><small>Evita postar sempre no mesmo minuto.</small></label>
             <label class="field"><span>Máximo de posts por dia</span><input type="number" name="maxPerDay" min="1" max="288"></label>
             <label class="field"><span>Hashtags por post</span><input type="number" name="hashtagsCount" min="0" max="10"></label>
           </div>
