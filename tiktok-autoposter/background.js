@@ -24,6 +24,12 @@ async function load() {
     settings.orderV2 = true;
     await chrome.storage.local.set({ settings });
   }
+  // 1.7.1: a aba do TikTok passa a abrir na frente (as teclas de comando precisam da página visível)
+  if (!settings.fgV2) {
+    settings.foregroundTab = true;
+    settings.fgV2 = true;
+    await chrome.storage.local.set({ settings });
+  }
   let state = {
     settings,
     catalog: s.catalog,
@@ -656,12 +662,23 @@ async function finishJob(state, result) {
 // (o post sai com o nome do arquivo) ou trava a página ("Ocorreu um erro"). Aqui as teclas são
 // enviadas pelo próprio Chrome, idênticas às de um teclado.
 const KEYS = {
-  selectAll: { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 }, // Ctrl+A
-  backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 },
+  // "commands" faz o Chrome executar a edição mesmo quando a tecla de atalho não chega à página
+  selectAll: { key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2, commands: ['selectAll'] }, // Ctrl+A
+  backspace: { key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, commands: ['deleteBackward'] },
   enter: { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
   escape: { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 },
   end: { key: 'End', code: 'End', windowsVirtualKeyCode: 35, modifiers: 2 }, // Ctrl+End
 };
+// Deixa a aba visível dentro do Chrome (sem roubar o foco de outros programas, a menos que a janela esteja minimizada).
+async function focusTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.active) await chrome.tabs.update(tabId, { active: true });
+    const win = await chrome.windows.get(tab.windowId);
+    if (win.state === 'minimized') await chrome.windows.update(tab.windowId, { state: 'normal' });
+  } catch (_) { /* aba fechada */ }
+}
+
 async function cdpType(tabId, actions) {
   if (!tabId) return { ok: false, error: 'aba desconhecida' };
   const target = { tabId };
@@ -671,6 +688,12 @@ async function cdpType(tabId, actions) {
     return { ok: false, error: `não consegui usar o teclado do Chrome (${e.message}). Feche as Ferramentas do desenvolvedor (F12) nessa aba, se estiverem abertas.` };
   }
   try {
+    // Teclas de comando (Ctrl+A, Backspace, Enter) só valem com a página "em foco":
+    // traz a aba para a frente no Chrome e liga o modo de foco do próprio Chrome.
+    await focusTab(tabId);
+    await chrome.debugger.sendCommand(target, 'Page.bringToFront').catch(() => {});
+    await chrome.debugger.sendCommand(target, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+    await sleep(400);
     for (const a of actions) {
       if (a.text != null) {
         await chrome.debugger.sendCommand(target, 'Input.insertText', { text: a.text });
@@ -796,6 +819,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     });
     return false;
+  }
+  if (msg.type === 'focus-tab') {
+    focusTab(sender.tab?.id).then(() => sendResponse({ ok: true }));
+    return true;
   }
   if (msg.type === 'cdp-type') {
     cdpType(sender.tab?.id, msg.actions || []).then(sendResponse, (e) => sendResponse({ ok: false, error: String(e?.message || e) }));

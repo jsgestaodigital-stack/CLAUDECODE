@@ -481,9 +481,16 @@
     const original = (ed.innerText || '').trim();
     logAct(`campo de legenda: ${describe(ed)} · texto atual: "${original.slice(0, 80)}"`);
     await human(800, 1500);
+    // a aba precisa estar visível para as teclas de comando (Ctrl+A, Backspace, Enter) funcionarem
+    if (document.hidden) {
+      logAct('aba em segundo plano: trazendo a aba do TikTok para a frente');
+      await chrome.runtime.sendMessage({ type: 'focus-tab' }).catch(() => {});
+      await sleep(800);
+    }
     await click(ed);
     await human(300, 700);
     caretToEnd(ed);
+    logAct(`aba visível: ${!document.hidden}`);
     logAct(`⌨ digitando a legenda com o teclado do Chrome (${caption.length} caracteres${HUMAN ? ', em ritmo humano' : ''}): Ctrl+A, Backspace e o texto`);
     const r = await chrome.runtime.sendMessage({ type: 'cdp-type', actions: typingActions(caption) });
     if (!r?.ok) throw new Error(r?.error || 'não consegui digitar a legenda');

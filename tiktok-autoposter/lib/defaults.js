@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS = {
   onExhausted: 'pause',         // 'pause' (produto para) | 'loop' (recomeça os vídeos do produto)
   brandedContent: true,         // marcar "Conteúdo de marca" (marca de terceiros)
   linkProduct: true,            // vincular produto do TikTok Shop
-  foregroundTab: false,         // abrir a aba do TikTok em primeiro plano
+  foregroundTab: true,         // abrir a aba do TikTok em primeiro plano
   closeTabAfter: true,          // fechar a aba depois de postar
   speed: 'human',               // 'human' (devagar, como uma pessoa) | 'normal'
   maxRetries: 1,                // novas tentativas do mesmo vídeo em caso de falha
