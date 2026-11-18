@@ -15,6 +15,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
 
 // Servidor HTTPS local que responde no lugar de www.tiktok.com (o Chromium é apontado para ele).
 let pageBody = MOCK;
+let hangPages = false; // simula o TikTok que não carrega (internet/computador "dormindo")
 const telegram = [];
 function startServer() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ttap-cert-'));
@@ -37,6 +38,7 @@ function startServer() {
       });
       return;
     }
+    if (hangPages && req.url.startsWith('/tiktokstudio')) return; // nunca responde
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     if (req.url.startsWith('/view/product/')) { // página do produto (para ler o nome)
       const id = req.url.split('/')[3].split('?')[0];

@@ -64,7 +64,8 @@ export const DEFAULT_SETTINGS = {
   speed: 'human',               // 'human' (devagar, como uma pessoa) | 'normal'
   maxRetries: 1,                // novas tentativas do mesmo vídeo em caso de falha
   pauseAfterFailures: 3,        // pausa tudo após N falhas seguidas
-  keepAwake: true,              // impedir o computador de suspender enquanto estiver rodando
+  keepAwake: true,
+  keepScreenOn: true,           // manter a tela ligada enquanto roda (evita o Windows "adormecer" rede/Chrome)              // impedir o computador de suspender enquanto estiver rodando
   telegramEnabled: false,       // avisos no celular pelo Telegram
   telegramToken: '',
   telegramChatId: '',

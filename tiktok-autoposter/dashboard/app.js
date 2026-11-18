@@ -209,6 +209,8 @@ function renderBanner() {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>O Chrome precisa de permissão para ler a pasta “${esc(folderName)}”</b><span class="muted small">Sem isso as postagens param. Clique em Reautorizar e, se aparecer, escolha “Permitir em todas as visitas”.</span></div><button class="btn primary small" data-act="reauth">Reautorizar pasta</button></div>`;
   } else if (folderName && folderPerm === 'granted' && writePerm !== 'granted') {
     html = `<div class="banner warn">${icon('shield')}<div class="grow"><b>Ative a cópia de segurança automática</b><span class="muted small">Com a permissão de edição da pasta, a extensão grava suas configurações e produtos no arquivo “_autoposter-config.json” dentro da pasta de vídeos. Assim, ao instalar uma versão nova, tudo volta sozinho.</span></div><button class="btn primary small" data-act="enable-backup">Ativar</button></div>`;
+  } else if (S.runtime.running && S.runtime.infraFailures > 0) {
+    html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>O TikTok não abriu na última tentativa (${S.runtime.infraFailures}x)</b><span class="muted small">Não é problema dos vídeos. A extensão tenta de novo sozinha${S.runtime.nextRunAt ? ` por volta das ${fmtTime(S.runtime.nextRunAt)}` : ''}. Confira a internet e se o computador está ligado com a tela acesa.</span></div></div>`;
   } else if (!S.runtime.running && S.runtime.pausedReason === 'logged-out') {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>Pausado: o TikTok está deslogado neste Chrome</b><span class="muted small">Entre na sua conta do TikTok e depois clique em Iniciar.</span></div><a class="btn small" href="https://www.tiktok.com/login" target="_blank" rel="noopener">Entrar no TikTok</a></div>`;
   } else if (!S.runtime.running && S.runtime.consecutiveFailures >= (S.settings.pauseAfterFailures || 3)) {
@@ -514,7 +516,7 @@ function fillSettings() {
   f.activeStartHour.innerHTML = hours(0, 23);
   f.activeEndHour.innerHTML = hours(1, 24);
   for (const k of ['jitterMinutes', 'maxPerDay', 'hashtagsCount', 'activeStartHour', 'activeEndHour', 'videoOrder', 'onExhausted', 'maxRetries', 'pauseAfterFailures', 'uploadUrl', 'speed']) f[k].value = s[k];
-  for (const k of ['linkProduct', 'brandedContent', 'foregroundTab', 'closeTabAfter', 'keepAwake', 'telegramEnabled', 'telegramEachPost', 'telegramSummary']) f[k].checked = !!s[k];
+  for (const k of ['linkProduct', 'brandedContent', 'foregroundTab', 'closeTabAfter', 'keepAwake', 'keepScreenOn', 'telegramEnabled', 'telegramEachPost', 'telegramSummary']) f[k].checked = !!s[k];
   f.telegramSummaryHour.innerHTML = hours(0, 23);
   f.telegramSummaryHour.value = s.telegramSummaryHour ?? 22;
   f.telegramToken.value = s.telegramToken || '';
@@ -555,6 +557,7 @@ async function saveSettings(e) {
     linkProduct: f.linkProduct.checked, brandedContent: f.brandedContent.checked,
     foregroundTab: f.foregroundTab.checked, closeTabAfter: f.closeTabAfter.checked,
     keepAwake: f.keepAwake.checked,
+    keepScreenOn: f.keepScreenOn.checked,
     speed: f.speed.value === 'normal' ? 'normal' : 'human',
     telegramEnabled: f.telegramEnabled.checked,
     telegramToken: f.telegramToken.value.trim(),

@@ -122,7 +122,9 @@ async function telegramSend(token, chatId, text) {
 // Mantém o computador acordado enquanto o AutoPoster estiver rodando (a tela pode desligar).
 function syncPower(rt, settings) {
   try {
-    if (rt?.running && settings?.keepAwake !== false) chrome.power.requestKeepAwake('system');
+    // "display" mantém a tela ligada: com a tela desligada o Windows economiza energia na rede e no
+    // Chrome, e a página do TikTok pode nem carregar de madrugada
+    if (rt?.running && settings?.keepAwake !== false) chrome.power.requestKeepAwake(settings?.keepScreenOn !== false ? 'display' : 'system');
     else chrome.power.releaseKeepAwake();
   } catch (_) { /* sem a permissão power */ }
 }
@@ -302,7 +304,9 @@ async function tick() {
   if (rt.currentJob) {
     const job = rt.currentJob;
     const lastSignal = job.lastProgressAt || job.startedAt;
-    if (now - job.startedAt > JOB_TIMEOUT_MS) {
+    if (!job.contentStarted && now - job.startedAt > 4 * MIN) {
+      await abortJob(state, 'A página do TikTok não chegou a funcionar (não carregou ou ficou congelada). Não é problema do vídeo.', { infra: true });
+    } else if (now - job.startedAt > JOB_TIMEOUT_MS) {
       await abortJob(state, 'Tempo limite excedido (35 min).');
     } else if (now - lastSignal > JOB_SILENCE_MS) {
       await abortJob(state, 'A página do TikTok parou de responder.');
@@ -458,20 +462,49 @@ async function startJob(state, { dryRun, videoPath, manual } = {}) {
 
   try {
     // testes e "Postar agora" abrem na frente (para você acompanhar); os automáticos seguem a configuração
-    const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active: !!(state.settings.foregroundTab || dryRun || videoPath || job.manual) });
-    job.tabId = tab.id;
-    rt.currentJob = job;
-    await save({ runtime: rt });
-    await waitTabComplete(tab.id, 90 * 1000);
-    await sleep(2500 + Math.random() * 2500);
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/tiktok.js'] });
     const { labels, ...jobForPage } = job;
-    await chrome.tabs.sendMessage(tab.id, { type: 'run-job', job: { ...jobForPage, labels } });
+    await openTikTokTab(state, job, !!(state.settings.foregroundTab || dryRun || videoPath || job.manual), { type: 'run-job', job: { ...jobForPage, labels } });
   } catch (e) {
-    await finishJob(state, { ok: false, error: 'Falha ao abrir o TikTok Studio: ' + (e.message || e), step: job.step, jobId: job.id });
+    await finishJob(state, { ok: false, error: 'Falha ao abrir o TikTok Studio: ' + (e.message || e), step: job.step, jobId: job.id, infra: true });
     return { ok: false, error: String(e.message || e) };
   }
   return { ok: true, jobId: job.id };
+}
+
+const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(msg || 'tempo esgotado')), ms))]);
+
+function jobLog(job, m) {
+  job.log = [...(job.log || []), { t: Date.now(), s: 'Abrindo o TikTok Studio', m }].slice(-500);
+}
+
+// Abre a aba do TikTok Studio e entrega a tarefa ao script da página, registrando cada passo.
+// Se a página não carregar, recarrega uma vez. Tudo com tempo-limite, para nada ficar pendurado.
+async function openTikTokTab(state, job, active, message) {
+  const rt = state.runtime;
+  const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active });
+  job.tabId = tab.id;
+  jobLog(job, `aba criada (${active ? 'na frente' : 'em segundo plano'})`);
+  rt.currentJob = job;
+  await save({ runtime: rt });
+  chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {}); // o Chrome não descarta a aba para economizar memória
+  try {
+    await waitTabComplete(tab.id, 90 * 1000);
+  } catch (e) {
+    if (/fechada/.test(e.message)) throw e;
+    jobLog(job, 'a página não terminou de carregar em 90s → recarregando a aba');
+    await save({ runtime: rt });
+    await chrome.tabs.reload(tab.id);
+    await waitTabComplete(tab.id, 75 * 1000);
+  }
+  const t = await chrome.tabs.get(tab.id);
+  if (!/^https:\/\/www\.tiktok\.com\//.test(t.url || '')) throw new Error(`a aba não abriu o TikTok (endereço: ${(t.url || '?').slice(0, 80)}) — sem internet?`);
+  jobLog(job, `página carregada: ${t.url.slice(0, 90)}`);
+  await sleep(2500 + Math.random() * 2500);
+  await withTimeout(chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/tiktok.js'] }), 30000, 'a página não aceitou o script (congelada)');
+  jobLog(job, 'script da extensão injetado na página');
+  await withTimeout(chrome.tabs.sendMessage(tab.id, message), 20000, 'a página não respondeu (congelada)');
+  jobLog(job, 'tarefa entregue à página');
+  await save({ runtime: rt });
 }
 
 function refillExhausted(state) {
@@ -496,13 +529,13 @@ async function closeTikTokTab(tabId) {
 
 // Cancela a postagem em andamento: avisa a página para parar e fecha a aba,
 // para que ela não publique depois de a extensão ter desistido.
-async function abortJob(state, reason) {
+async function abortJob(state, reason, extra = {}) {
   const job = state.runtime.currentJob;
   if (!job) return;
   if (job.tabId) {
-    try { await chrome.tabs.sendMessage(job.tabId, { type: 'abort-job' }); } catch (_) { /* página já fechada */ }
+    try { await withTimeout(chrome.tabs.sendMessage(job.tabId, { type: 'abort-job' }), 5000, ''); } catch (_) { /* página já fechada */ }
   }
-  await finishJob(state, { ok: false, error: reason, step: job.step, jobId: job.id, aborted: true });
+  await finishJob(state, { ok: false, error: reason, step: job.step, jobId: job.id, aborted: true, ...extra });
   if (job.tabId) closeTikTokTab(job.tabId);
 }
 
@@ -531,7 +564,7 @@ async function finishJob(state, result) {
   if (job.type === 'sync') return finishSync(state, result);
   // registro: o que a página mandou no final, ou o que foi chegando durante a postagem
   result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
-  if (job.tabId && (!result.ok || job.dryRun)) result.shot = await screenshot(job.tabId);
+  if (job.tabId && (!result.ok || job.dryRun) && !result.infra) result.shot = await withTimeout(screenshot(job.tabId), 8000, '').catch(() => null);
   rt.currentJob = null;
   rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun }, ...(rt.recentJobs || [])].slice(0, 5);
   const s = state.settings;
@@ -558,6 +591,26 @@ async function finishJob(state, result) {
     }
     await saveAll(state);
     notify(result.ok ? 'Teste concluído ✅' : 'Teste falhou ❌', result.ok ? 'Tudo preenchido. A aba ficou aberta para você conferir (nada foi publicado).' : `${result.step}: ${result.error}`);
+    return;
+  }
+
+  // Problema para abrir/rodar a página (internet, computador economizando energia, página congelada):
+  // não é culpa do vídeo — não marca o vídeo, não conta para a pausa e tenta de novo com espera crescente.
+  if (!result.ok && result.infra && !job.contentStarted) {
+    if (job.tabId) closeTikTokTab(job.tabId);
+    rt.infraFailures = (rt.infraFailures || 0) + 1;
+    const waitMin = Math.min(5 * rt.infraFailures, 30);
+    addHistory(state, {
+      status: 'failed', infra: true, product: job.product, productName: job.productName, video: job.path, caption: job.caption,
+      error: `${result.error} Não é problema do vídeo: ele continua na fila. Nova tentativa em ${waitMin} min.`, step: result.step || job.step, durationMs, log: result.log, shot: result.shot,
+    });
+    rt.retry = null;
+    if (rt.running) rt.nextRunAt = now + waitMin * MIN;
+    await saveAll(state);
+    syncPower(rt, s);
+    if (rt.infraFailures === 1 || rt.infraFailures % 6 === 0) {
+      notify('AutoPoster: o TikTok não abriu', `${result.error} Vou tentar de novo em ${waitMin} min (tentativa ${rt.infraFailures}). Confira a internet e se o computador está ligado com a tela acesa.`);
+    }
     return;
   }
 
@@ -605,6 +658,7 @@ async function finishJob(state, result) {
     }
     rt.lastProduct = job.product;
     rt.consecutiveFailures = 0;
+    rt.infraFailures = 0;
     rt.lastPostAt = now;
     addHistory(state, {
       status: 'posted', product: job.product, productName: job.productName, video: job.path,
@@ -729,14 +783,7 @@ async function startSync(state) {
   rt.currentJob = job;
   await saveAll(state);
   try {
-    const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active: true });
-    job.tabId = tab.id;
-    rt.currentJob = job;
-    await save({ runtime: rt });
-    await waitTabComplete(tab.id, 90 * 1000);
-    await sleep(2500);
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/tiktok.js'] });
-    await chrome.tabs.sendMessage(tab.id, { type: 'run-sync', job });
+    await openTikTokTab(state, job, true, { type: 'run-sync', job });
   } catch (e) {
     await finishSync(state, { ok: false, error: 'Falha ao abrir o TikTok Studio: ' + (e.message || e), jobId: job.id });
     return { ok: false, error: String(e.message || e) };
@@ -803,6 +850,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (job && job.id === msg.jobId) {
         job.step = msg.step || job.step;
         job.lastProgressAt = Date.now();
+        job.contentStarted = true;
         await save({ runtime: state.runtime });
       }
     });
@@ -815,6 +863,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (job && job.id === msg.jobId) {
         job.log = [...(job.log || []), ...(msg.entries || [])].slice(-500);
         job.lastProgressAt = Date.now();
+        job.contentStarted = true;
         await save({ runtime: state.runtime });
       }
     });
