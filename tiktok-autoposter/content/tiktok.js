@@ -238,9 +238,46 @@
     return null;
   }
 
+  // Calibração: com zoom do Chrome ou escala do Windows, a coordenada que o Chrome recebe pode
+  // não ser a mesma que a página usa. Move o mouse para um ponto conhecido e mede onde ele chegou.
+  let scale = null;
+  async function calibrate() {
+    if (scale) return scale;
+    const x = Math.round(innerWidth * 0.5);
+    const y = Math.round(innerHeight * 0.4);
+    for (const guess of [1, 1]) {
+      let got = null;
+      const on = (e) => { if (e.isTrusted) got = { x: e.clientX, y: e.clientY }; };
+      window.addEventListener('mousemove', on, true);
+      try {
+        await chrome.runtime.sendMessage({ type: 'cdp-mouse', points: [], x: (x - 7) * guess, y: (y - 5) * guess, wheel: { deltas: [] } });
+        await chrome.runtime.sendMessage({ type: 'cdp-mouse', points: [], x: x * guess, y: y * guess, wheel: { deltas: [] } });
+      } catch (_) { /* sem resposta */ }
+      const end = Date.now() + 1500;
+      while (!got && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+      window.removeEventListener('mousemove', on, true);
+      if (got && got.x > 0 && got.y > 0) {
+        const sx = got.x / x;
+        const sy = got.y / y;
+        scale = { x: Math.abs(sx - 1) < 0.02 ? 1 : sx, y: Math.abs(sy - 1) < 0.02 ? 1 : sy };
+        logAct(`mouse do Chrome calibrado: escala ${scale.x.toFixed(3)} × ${scale.y.toFixed(3)} (janela ${innerWidth}x${innerHeight}, zoom/escala ${devicePixelRatio})`);
+        return scale;
+      }
+    }
+    logAct('⚠ não consegui calibrar o mouse do Chrome (sem resposta) — usando escala 1');
+    scale = { x: 1, y: 1 };
+    return scale;
+  }
+  // Converte coordenadas da página para as que o Chrome espera.
+  function toDevice(msg) {
+    const c = (p) => ({ ...p, x: p.x / scale.x, y: p.y / scale.y });
+    return { ...msg, ...c({ x: msg.x, y: msg.y }), points: (msg.points || []).map(c) };
+  }
+
   async function trusted(msg) {
     if (!trustedOk) return false;
     try {
+      if (msg.type === 'cdp-mouse') { await calibrate(); msg = toDevice(msg); }
       const r = await chrome.runtime.sendMessage(msg);
       if (r?.ok) return true;
       logAct(`⚠ mouse/teclado do Chrome indisponível (${r?.error || 'sem resposta'}) — usando clique simulado`);
@@ -299,11 +336,25 @@
     const pt = (r0.width < 1 || r0.height < 1) && !el.matches('input') && !el.closest('label') ? null : hitPoint(el);
     logAct(`🖱 clicando em ${describe(el)}${pt ? '' : ' (coberto/sem área visível: clique simulado)'}`);
     if (pt && trustedOk) {
+      // confere onde o clique de verdade caiu
+      let hit = null;
+      const on = (e) => { if (e.isTrusted && !hit) hit = e.target; };
+      window.addEventListener('pointerdown', on, true);
+      window.addEventListener('mousedown', on, true);
       const ok = await trusted({ type: 'cdp-mouse', points: mousePath(pt.x, pt.y), x: pt.x, y: pt.y, hover: HUMAN ? rnd(140, 420) * (SPEED / 2.2) : 60, hold: rnd(60, 150) });
+      await new Promise((r) => setTimeout(r, 60));
+      window.removeEventListener('pointerdown', on, true);
+      window.removeEventListener('mousedown', on, true);
       if (ok) {
         lastMouse = pt;
-        await human(400, 900);
-        return;
+        const lab = el.closest('label');
+        const right = hit && (el.contains(hit) || (hiddenish(el) && hit.contains(el)) || (lab && lab.contains(hit)) || (hit.closest && clickable(hit) === el));
+        if (right) {
+          await human(400, 900);
+          return;
+        }
+        logAct(`⚠ o clique de verdade caiu em ${hit ? describe(hit) : 'lugar nenhum'} em vez do alvo — recalibrando e usando clique simulado`);
+        scale = null;
       }
     }
     syntheticClick(el);
@@ -1303,6 +1354,7 @@
     clickedPublish = false;
     scheduledAt = null;
     trustedOk = true;
+    scale = null;
     aborted = false;
     pageError = null;
     HUMAN = job.speed !== 'normal';
@@ -1350,6 +1402,7 @@
     pendingLog = [];
     aborted = false;
     trustedOk = true;
+    scale = null;
     pageError = null;
     HUMAN = job.speed !== 'normal';
     SPEED = HUMAN ? 1.6 : 1;

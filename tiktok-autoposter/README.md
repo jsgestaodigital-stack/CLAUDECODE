@@ -100,7 +100,7 @@ O painel abre no tema escuro e mostra a **configuração passo a passo**:
 A extensão **não abre mais o TikTok Studio a cada post**. Ela trabalha em **sessões**:
 
 1. Nos **horários das sessões** (padrão: 09:00, 14:00 e 20:00, cada uma começando de 0 a 20 min depois, ao acaso), ela abre o TikTok Studio.
-2. Na sessão, envia um vídeo por vez **na mesma aba**, com legenda, produto e “Conteúdo de marca”, escolhe **Quando publicar → Agendar**, a **data** e a **hora**, e clica em **Agendar**. Entre um vídeo e outro, faz uma pausa de 2 a 5 min.
+2. Na sessão, se não houver nada agendado pela frente, o 1º vídeo é publicado na hora. Depois envia um vídeo por vez **na mesma aba**, com legenda, produto e “Conteúdo de marca”, escolhe **Quando publicar → Agendar**, a **data** e a **hora**, e clica em **Agendar**. Entre um vídeo e outro, faz uma pausa de 2 a 5 min.
 3. Ela agenda até cobrir o período até a próxima sessão (com folga de 1h30), respeitando o **máximo de vídeos por sessão**.
 4. Quem publica na hora certa são os **servidores do TikTok**. Entre as sessões, o seu computador não faz nada e pode até estar desligado.
 

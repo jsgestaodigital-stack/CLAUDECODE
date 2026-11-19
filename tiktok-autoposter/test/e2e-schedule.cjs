@@ -114,29 +114,35 @@ async function main() {
   await dash.screenshot({ path: path.join(SHOTS, 's-config.png'), fullPage: false });
   await dash.click('[data-view="overview"]');
 
-  console.log('S2) sessão: agenda 2 vídeos na mesma aba');
+  console.log('S1b) zoom de 110% no TikTok (como no computador do usuário)');
+  const z = await ctx.newPage();
+  await z.goto('https://www.tiktok.com/tiktokstudio/upload?zoomsetup=1');
+  await dash.evaluate(async () => { const [t] = await chrome.tabs.query({ url: 'https://www.tiktok.com/*' }); await chrome.tabs.setZoom(t.id, 1.1); });
+  await z.close();
+
+  console.log('S2) sessão: agenda vazia → 1º sai agora, 2º agendado ~1h depois, mesma aba');
   const pages = [];
   ctx.on('page', (p) => { if (p.url().includes('tiktok')) pages.push(p); });
   r = await cmd('session-now');
   assert(r.ok, 'sessão iniciada ' + JSON.stringify(r));
   ctx.on('page', (p) => p.on('pageerror', (e) => errors.push('tt: ' + e.message)));
-  const h1 = await waitHistory((h) => h.status === 'scheduled' || h.status === 'failed', 240000);
+  const h1 = await waitHistory((h) => h.status === 'posted' || h.status === 'scheduled' || h.status === 'failed', 240000);
   if (h1.status === 'failed') { console.log(h1.error, '\n', (h1.log || []).slice(-40).join('\n')); }
-  assert(h1.status === 'scheduled', '1º vídeo agendado');
-  // a mock troca de página ao "publicar": o resultado fica no histórico da extensão
-  const st1 = await get(['videos', 'runtime']);
-  const sch = Object.values(st1.videos).filter((v) => v.status === 'scheduled');
-  assert(sch.length === 1 && sch[0].scheduledFor > Date.now() + 15 * 60000, 'vídeo marcado como agendado com horário futuro');
-  assert(new Date(sch[0].scheduledFor).getMinutes() % 5 === 0, 'horário em múltiplo de 5 min');
+  assert(h1.status === 'posted', 'agenda vazia: 1º vídeo publicado agora');
   const log1 = (h1.log || []).join('\n');
-  assert(/agendamento preenchido/.test(log1) && !/clique simulado/.test(log1), 'preencheu data/hora só com cliques reais');
-  console.log((h1.log || []).filter((l) => /🗓|data|hora|seletor|calend|botão final|Permitir/.test(l)).join('\n'));
+  console.log((h1.log || []).filter((l) => /calibrado|⚠/.test(l)).join('\n'));
+  assert(/calibrado/.test(log1) && /zoom\/escala 1\.1/.test(log1), 'mouse calibrado com o zoom de 110%');
+  assert(!/clique simulado|caiu em/.test(log1), 'todos os cliques de verdade acertaram o alvo');
+  const st1 = await get(['videos', 'runtime']);
   assert(st1.runtime.session && st1.runtime.session.done === 1, 'sessão continua (1 feito)');
   // pula a pausa humana entre vídeos
   await dash.evaluate(async () => { const { runtime } = await chrome.storage.local.get('runtime'); runtime.session.nextJobAt = Date.now(); await chrome.storage.local.set({ runtime }); });
   const h2 = await waitHistory((h) => (h.status === 'scheduled' && h.id !== h1.id) || (h.status === 'failed' && h.ts > h1.ts), 240000);
   if (h2.status === 'failed') console.log(h2.error, '\n', (h2.log || []).slice(-30).join('\n'));
   assert(h2.status === 'scheduled' && h2.publishAt - h1.publishAt >= 55 * 60000, '2º vídeo agendado ~1h depois do 1º');
+  const log2 = (h2.log || []).join('\n');
+  assert(/agendamento preenchido/.test(log2) && !/clique simulado|caiu em/.test(log2), 'preencheu data/hora só com cliques reais (zoom 110%)');
+  assert(new Date(h2.publishAt).getMinutes() % 5 === 0, 'horário em múltiplo de 5 min');
   assert((h2.log || []).some((l) => /mesma aba/.test(l)), '2º vídeo usou a mesma aba');
   await dash.evaluate(async () => { const { runtime } = await chrome.storage.local.get('runtime'); if (runtime.session) { runtime.session.nextJobAt = Date.now(); await chrome.storage.local.set({ runtime }); } });
   const hs = await waitHistory((h) => h.status === 'session', 120000);

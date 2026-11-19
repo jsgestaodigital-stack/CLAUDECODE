@@ -380,6 +380,15 @@ async function scheduleTick(state, now) {
   if (ses) {
     if (now < (ses.nextJobAt || 0)) return;
     if (ses.done >= ses.max) return endSession(state, `limite de ${ses.max} vídeos por sessão`);
+    // nada agendado pela frente (agenda vazia): o 1º vídeo sai AGORA e os próximos são agendados a partir dele
+    const hasFuture = Object.values(state.videos).some((v) => v.status === 'scheduled' && v.scheduledFor > now);
+    if (ses.done === 0 && !ses.triedNow && !hasFuture && (!rt.lastSlotAt || rt.lastSlotAt < now)
+      && isWithinActiveHours(new Date(now), s.activeStartHour, s.activeEndHour) && countPostedToday(state.history, now) < s.maxPerDay) {
+      ses.triedNow = true;
+      const r0 = await startJob(state, { sessionId: ses.id });
+      if (!r0.ok && !rt.currentJob) return endSession(state, r0.error || 'nada para postar', { quiet: true });
+      return;
+    }
     const slot = nextSlot({ lastSlotAt: rt.lastSlotAt, now, settings: s, history: state.history, leadMin: 35 });
     if (!slot || slot > ses.until) return endSession(state, `agenda coberta até ${dayHm(rt.lastSlotAt || now)}`);
     const r = await startJob(state, { scheduleAt: slot, sessionId: ses.id });
@@ -421,7 +430,7 @@ async function endSession(state, reason, { quiet = false, nextAt = null } = {}) 
     const times = (ses.slots || []).map(hm).join(', ');
     addHistory(state, {
       status: 'session', productName: 'Sessão de agendamento',
-      step: `${ses.done} vídeo(s) agendado(s)${times ? ` para ${times}` : ''}${ses.failed ? ` · ${ses.failed} falha(s)` : ''} · fim: ${reason}`,
+      step: `${ses.done} vídeo(s) enviado(s)${times ? ` (horários: ${times})` : ''}${ses.failed ? ` · ${ses.failed} falha(s)` : ''} · fim: ${reason}`,
       durationMs: now - ses.startedAt,
     });
     if (state.settings.telegramEnabled && state.settings.telegramEachPost && !quiet) {
@@ -800,6 +809,12 @@ async function finishJob(state, result) {
         ses.slots = [...(ses.slots || []), scheduledAt];
         ses.nextJobAt = now + humanGap();
       }
+    } else if (ses) {
+      // publicado agora (agenda estava vazia): os próximos horários contam a partir deste
+      rt.lastSlotAt = Math.max(rt.lastSlotAt || 0, now);
+      ses.done++;
+      ses.slots = [...(ses.slots || []), now];
+      ses.nextJobAt = now + humanGap();
     } else if (rt.running && s.publishMode !== 'schedule') rt.nextRunAt = computeNextRun(now, s);
     if (s.telegramEnabled && s.telegramEachPost && !ses) {
       telegramFromSettings(`${scheduledAt ? `🗓 Agendado para ${dayHm(scheduledAt)}` : '✅ Publicado'}: ${job.productName} (${job.path.split('/').pop()})${result.linkedProduct ? `\n🛒 ${result.linkedProduct.slice(0, 80)}` : ''}`);
@@ -935,8 +950,8 @@ async function cdpMouse(tabId, { points = [], x, y, hover = 200, hold = 90, whee
   try { await cdpAttach(tabId); } catch (e) { return { ok: false, error: attachError(e) }; }
   try {
     await focusTab(tabId);
-    const zoom = await chrome.tabs.getZoom(tabId).catch(() => 1) || 1;
-    const Z = (n) => Math.round(n * zoom * 100) / 100;
+    // a página calibra a escala (zoom do Chrome / escala do Windows) e já manda as coordenadas certas
+    const Z = (n) => Math.round(n * 100) / 100;
     for (const p of points) {
       await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: Z(p.x), y: Z(p.y), button: 'none', buttons: 0 });
       await sleep(Math.max(5, Math.min(120, p.w || 20)));
