@@ -2,7 +2,7 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS, mergeLabels } from './lib/defaults.js';
 import {
   computeNextRun, countPostedToday, pickNext, mergeScan, isWithinActiveHours, isLinkReady, productBlocked, linkKey,
-  migrate, productKeyOf, itemOf, newCatalogKey, hash,
+  migrate, productKeyOf, itemOf, newCatalogKey, hash, nextSlot, computeNextSession, sessionHorizon, ceilToStep,
 } from './lib/scheduler.js';
 import { generateCaption, rememberCaption } from './lib/captions.js';
 import { mergeShowcase } from './lib/showcase.js';
@@ -28,6 +28,12 @@ async function load() {
   if (!settings.fgV2) {
     settings.foregroundTab = true;
     settings.fgV2 = true;
+    await chrome.storage.local.set({ settings });
+  }
+  // 2.0: passa a agendar pelo próprio TikTok (abre o TikTok Studio só poucas vezes por dia)
+  if (!settings.schedV2) {
+    settings.publishMode = 'schedule';
+    settings.schedV2 = true;
     await chrome.storage.local.set({ settings });
   }
   let state = {
@@ -142,19 +148,29 @@ async function maybeDailySummary(state) {
   const since = new Date(now); since.setHours(0, 0, 0, 0);
   const today = state.history.filter((h) => h.ts >= since.getTime());
   const posted = today.filter((h) => h.status === 'posted').length;
+  const scheduled = today.filter((h) => h.status === 'scheduled').length;
   const failed = today.filter((h) => h.status === 'failed').length;
   const check = Object.values(state.videos).filter((v) => v.status === 'unconfirmed').length;
   const pending = Object.values(state.videos).filter((v) => v.status === 'pending').length;
   const lines = [
     `📊 Resumo de hoje`,
-    `✅ Publicados: ${posted}`,
+    s.publishMode === 'schedule' ? `🗓 Agendados hoje no TikTok: ${scheduled}` : `✅ Publicados: ${posted}`,
     `❌ Falhas: ${failed}`,
     check ? `⚠️ Para conferir no TikTok: ${check}` : null,
     `🎬 Vídeos na fila: ${pending}`,
-    rt.running ? `▶️ Rodando${rt.nextRunAt ? ` — próximo post ~${new Date(rt.nextRunAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` : ''}` : '⏸ Pausado',
+    rt.running ? `▶️ Rodando${s.publishMode === 'schedule'
+      ? (rt.nextSessionAt ? ` — próxima sessão ~${hm(rt.nextSessionAt)}` : '')
+      : (rt.nextRunAt ? ` — próximo post ~${hm(rt.nextRunAt)}` : '')}` : '⏸ Pausado',
   ].filter(Boolean);
   telegramSend(s.telegramToken, s.telegramChatId, lines.join('\n')).catch((e) => log('telegram summary', e));
 }
+
+const hm = (ts) => new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+const dayHm = (ts) => {
+  const d = new Date(ts);
+  const today = new Date().toDateString() === d.toDateString();
+  return `${today ? 'hoje' : d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${hm(ts)}`;
+};
 
 // ---------- documento invisível (leitura dos arquivos) ----------
 async function ensureOffscreen() {
@@ -266,6 +282,7 @@ chrome.runtime.onStartup.addListener(async () => {
     const state = await load();
     // IDs de abas não valem entre sessões do Chrome
     state.runtime.staleTabId = null;
+    if (state.runtime.session) state.runtime.session.tabId = null;
     syncPower(state.runtime, state.settings);
     if (state.runtime.currentJob) state.runtime.currentJob.tabId = null;
     await save({ runtime: state.runtime });
@@ -313,7 +330,10 @@ async function tick() {
     }
     return;
   }
+  // vídeos agendados cujo horário já passou: o TikTok publicou → "publicado"
+  if (markScheduledAsPosted(state, now)) await save({ videos: state.videos });
   if (!rt.running) return;
+  if (state.settings.publishMode === 'schedule') return scheduleTick(state, now);
   if (!rt.nextRunAt) {
     rt.nextRunAt = now + MIN;
     await save({ runtime: rt });
@@ -339,8 +359,82 @@ async function tick() {
   await startJob(state, { dryRun: false });
 }
 
+function markScheduledAsPosted(state, now) {
+  let changed = false;
+  for (const [p, v] of Object.entries(state.videos)) {
+    if (v.status === 'scheduled' && v.scheduledFor && v.scheduledFor <= now) {
+      state.videos[p] = { ...v, status: 'posted', postedAt: v.scheduledFor };
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// ---------- modo agendamento: sessões ----------
+// Fora das sessões nada é aberto. Numa sessão, a extensão agenda um vídeo por vez (na mesma aba),
+// com uma pausa humana entre eles, até cobrir o período até a próxima sessão.
+async function scheduleTick(state, now) {
+  const rt = state.runtime;
+  const s = state.settings;
+  const ses = rt.session;
+  if (ses) {
+    if (now < (ses.nextJobAt || 0)) return;
+    if (ses.done >= ses.max) return endSession(state, `limite de ${ses.max} vídeos por sessão`);
+    const slot = nextSlot({ lastSlotAt: rt.lastSlotAt, now, settings: s, history: state.history, leadMin: 35 });
+    if (!slot || slot > ses.until) return endSession(state, `agenda coberta até ${dayHm(rt.lastSlotAt || now)}`);
+    const r = await startJob(state, { scheduleAt: slot, sessionId: ses.id });
+    // sem vídeo / produto sem link / pasta sem acesso: termina a sessão (a próxima tenta de novo)
+    if (!r.ok && !rt.currentJob) return endSession(state, r.error || 'nada para agendar', { quiet: true });
+    return;
+  }
+  if (!rt.nextSessionAt) {
+    rt.nextSessionAt = computeNextSession(now, s) || now + 60 * MIN;
+    await save({ runtime: rt });
+    return;
+  }
+  if (now < rt.nextSessionAt) return;
+  await beginSession(state, now);
+}
+
+async function beginSession(state, now = Date.now()) {
+  const rt = state.runtime;
+  const s = state.settings;
+  rt.session = {
+    id: crypto.randomUUID(), startedAt: now, until: sessionHorizon(now, s),
+    max: Math.max(1, Math.min(20, Number(s.perSessionMax) || 6)), done: 0, failed: 0, slots: [], nextJobAt: now, tabId: null,
+  };
+  rt.nextSessionAt = null;
+  await save({ runtime: rt });
+  log('sessão iniciada, cobrir até', new Date(rt.session.until).toString());
+  return scheduleTick(state, now);
+}
+
+async function endSession(state, reason, { quiet = false, nextAt = null } = {}) {
+  const rt = state.runtime;
+  const ses = rt.session;
+  if (!ses) return;
+  rt.session = null;
+  const now = Date.now();
+  rt.nextSessionAt = nextAt || computeNextSession(now, state.settings) || now + 60 * MIN;
+  if (ses.tabId && state.settings.closeTabAfter) setTimeout(() => closeTikTokTab(ses.tabId), 3000);
+  if (ses.done || ses.failed) {
+    const times = (ses.slots || []).map(hm).join(', ');
+    addHistory(state, {
+      status: 'session', productName: 'Sessão de agendamento',
+      step: `${ses.done} vídeo(s) agendado(s)${times ? ` para ${times}` : ''}${ses.failed ? ` · ${ses.failed} falha(s)` : ''} · fim: ${reason}`,
+      durationMs: now - ses.startedAt,
+    });
+    if (state.settings.telegramEnabled && state.settings.telegramEachPost && !quiet) {
+      telegramFromSettings(`🗓 Sessão concluída: ${ses.done} vídeo(s) agendado(s)${times ? ` (${times})` : ''}. Próxima sessão ~${dayHm(rt.nextSessionAt)}.`);
+    }
+  }
+  log('sessão encerrada:', reason);
+  await saveAll(state);
+  syncPower(rt, state.settings);
+}
+
 // ---------- execução de uma postagem ----------
-async function startJob(state, { dryRun, videoPath, manual } = {}) {
+async function startJob(state, { dryRun, videoPath, manual, scheduleAt, sessionId } = {}) {
   const rt = state.runtime;
   if (rt.currentJob) return { ok: false, error: 'Já existe uma postagem em andamento.' };
 
@@ -444,6 +538,9 @@ async function startJob(state, { dryRun, videoPath, manual } = {}) {
     dryRun: !!dryRun,
     attempt,
     manual: !!manual,
+    // modo agendamento: horário de publicação a escolher em "Agendar" (null = publicar agora)
+    scheduleAt: scheduleAt || (dryRun && state.settings.publishMode === 'schedule' ? ceilToStep(Date.now() + 75 * MIN) : null),
+    sessionId: sessionId || null,
     startedAt: Date.now(),
     lastProgressAt: Date.now(),
     step: 'Abrindo o TikTok Studio',
@@ -463,7 +560,8 @@ async function startJob(state, { dryRun, videoPath, manual } = {}) {
   try {
     // testes e "Postar agora" abrem na frente (para você acompanhar); os automáticos seguem a configuração
     const { labels, ...jobForPage } = job;
-    await openTikTokTab(state, job, !!(state.settings.foregroundTab || dryRun || videoPath || job.manual), { type: 'run-job', job: { ...jobForPage, labels } });
+    const reuse = sessionId && rt.session?.id === sessionId ? rt.session.tabId : null;
+    await openTikTokTab(state, job, !!(state.settings.foregroundTab || dryRun || videoPath || job.manual), { type: 'run-job', job: { ...jobForPage, labels } }, reuse);
   } catch (e) {
     await finishJob(state, { ok: false, error: 'Falha ao abrir o TikTok Studio: ' + (e.message || e), step: job.step, jobId: job.id, infra: true });
     return { ok: false, error: String(e.message || e) };
@@ -479,11 +577,23 @@ function jobLog(job, m) {
 
 // Abre a aba do TikTok Studio e entrega a tarefa ao script da página, registrando cada passo.
 // Se a página não carregar, recarrega uma vez. Tudo com tempo-limite, para nada ficar pendurado.
-async function openTikTokTab(state, job, active, message) {
+async function openTikTokTab(state, job, active, message, reuseTabId = null) {
   const rt = state.runtime;
-  const tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active });
+  let tab = null;
+  if (reuseTabId) {
+    // na sessão de agendamento, o próximo vídeo usa a mesma aba (como quem clica em "Carregar" de novo)
+    try {
+      const old = await chrome.tabs.get(reuseTabId);
+      if (/^https:\/\/www\.tiktok\.com\//.test(old.url || '')) {
+        await cdpRelease(reuseTabId);
+        tab = await chrome.tabs.update(reuseTabId, { url: state.settings.uploadUrl, ...(active ? { active: true } : {}) });
+        await sleep(2000);
+      }
+    } catch (_) { tab = null; }
+  }
+  if (!tab) tab = await chrome.tabs.create({ url: state.settings.uploadUrl, active });
   job.tabId = tab.id;
-  jobLog(job, `aba criada (${active ? 'na frente' : 'em segundo plano'})`);
+  jobLog(job, tab.id === reuseTabId ? 'mesma aba da sessão: abrindo o formulário de upload de novo' : `aba criada (${active ? 'na frente' : 'em segundo plano'})`);
   rt.currentJob = job;
   await save({ runtime: rt });
   chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {}); // o Chrome não descarta a aba para economizar memória
@@ -562,16 +672,23 @@ async function finishJob(state, result) {
   const job = rt.currentJob;
   if (!job || (result.jobId && result.jobId !== job.id)) return lateResult(state, result);
   if (job.type === 'sync') return finishSync(state, result);
-  // registro: o que a página mandou no final, ou o que foi chegando durante a postagem
-  result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
+  // registro: o que a página mandou no final (com os passos de abertura da aba na frente),
+  // ou o que foi chegando durante a postagem
+  const opening = fmtEntries((job.log || []).filter((e) => e && e.s === 'Abrindo o TikTok Studio'));
+  result.log = result.log && result.log.length ? [...opening, ...result.log] : fmtEntries(job.log);
   if (job.tabId && (!result.ok || job.dryRun) && !result.infra) result.shot = await withTimeout(screenshot(job.tabId), 8000, '').catch(() => null);
   rt.currentJob = null;
-  rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun }, ...(rt.recentJobs || [])].slice(0, 5);
+  if (job.tabId) cdpRelease(job.tabId);
+  rt.recentJobs = [{ id: job.id, path: job.path, product: job.product, productName: job.productName, caption: job.caption, captionMeta: job.captionMeta, dryRun: job.dryRun, scheduleAt: job.scheduleAt || null }, ...(rt.recentJobs || [])].slice(0, 5);
   const s = state.settings;
   const v = state.videos[job.path];
   const product = state.catalog[job.product];
   const now = Date.now();
   const durationMs = now - job.startedAt;
+  // postagem feita dentro de uma sessão de agendamento ainda ativa
+  const ses = job.sessionId && rt.session?.id === job.sessionId ? rt.session : null;
+  const humanGap = () => Math.round((2 + Math.random() * 3) * MIN); // pausa de 2 a 5 min entre vídeos da sessão
+  if (ses && job.tabId) ses.tabId = job.tabId;
 
   // Produto "Indisponível" na vitrine: marca no catálogo e deixa os vídeos dele na fila.
   if (!result.ok && result.unavailable && product) {
@@ -606,6 +723,10 @@ async function finishJob(state, result) {
     });
     rt.retry = null;
     if (rt.running) rt.nextRunAt = now + waitMin * MIN;
+    if (ses) {
+      ses.tabId = null;
+      await endSession(state, 'o TikTok não abriu', { quiet: true, nextAt: now + waitMin * MIN });
+    }
     await saveAll(state);
     syncPower(rt, s);
     if (rt.infraFailures === 1 || rt.infraFailures % 6 === 0) {
@@ -615,7 +736,8 @@ async function finishJob(state, result) {
   }
 
   if (!result.ok && result.unavailable) {
-    if (job.tabId) rt.staleTabId = job.tabId;
+    if (job.tabId && !ses) rt.staleTabId = job.tabId;
+    if (ses) ses.nextJobAt = now + MIN;
     addHistory(state, {
       status: 'failed', product: job.product, productName: job.productName, video: job.path, caption: job.caption,
       error: result.error, step: result.step, diag: result.diag, durationMs, attempt: job.attempt, log: result.log, linkedProduct: result.linkedProduct, shot: result.shot,
@@ -636,9 +758,11 @@ async function finishJob(state, result) {
       error: 'Você não está logado no TikTok neste Chrome. Entre na sua conta e clique em Iniciar.', step: result.step, diag: result.diag, durationMs, log: result.log, shot: result.shot,
     });
     rt.retry = null;
+    if (ses) await endSession(state, 'TikTok deslogado', { quiet: true });
     if (rt.running) {
       rt.running = false;
       rt.nextRunAt = null;
+      rt.nextSessionAt = null;
       rt.pausedReason = 'logged-out';
     }
     await save({ runtime: rt, history: state.history });
@@ -647,8 +771,13 @@ async function finishJob(state, result) {
     return;
   }
 
+  const scheduledAt = result.ok && job.scheduleAt ? (Number(result.scheduledAt) || job.scheduleAt) : null;
   if (result.ok) {
-    if (v) state.videos[job.path] = { ...v, status: 'posted', postedAt: now, caption: job.caption };
+    if (v) {
+      state.videos[job.path] = scheduledAt
+        ? { ...v, status: 'scheduled', scheduledFor: scheduledAt, postedAt: scheduledAt, caption: job.caption }
+        : { ...v, status: 'posted', postedAt: now, caption: job.caption };
+    }
     if (product) {
       state.catalog[job.product] = {
         ...product, lastPostedAt: now,
@@ -661,27 +790,38 @@ async function finishJob(state, result) {
     rt.infraFailures = 0;
     rt.lastPostAt = now;
     addHistory(state, {
-      status: 'posted', product: job.product, productName: job.productName, video: job.path,
+      status: scheduledAt ? 'scheduled' : 'posted', publishAt: scheduledAt || now, product: job.product, productName: job.productName, video: job.path,
       caption: job.caption, durationMs, url: result.url, attempt: job.attempt, log: result.log, linkedProduct: result.linkedProduct,
     });
-    if (rt.running) rt.nextRunAt = computeNextRun(now, s);
-    if (s.telegramEnabled && s.telegramEachPost) {
-      telegramFromSettings(`✅ Publicado: ${job.productName} (${job.path.split('/').pop()})${result.linkedProduct ? `\n🛒 ${result.linkedProduct.slice(0, 80)}` : ''}`);
+    if (scheduledAt) {
+      rt.lastSlotAt = Math.max(rt.lastSlotAt || 0, scheduledAt);
+      if (ses) {
+        ses.done++;
+        ses.slots = [...(ses.slots || []), scheduledAt];
+        ses.nextJobAt = now + humanGap();
+      }
+    } else if (rt.running && s.publishMode !== 'schedule') rt.nextRunAt = computeNextRun(now, s);
+    if (s.telegramEnabled && s.telegramEachPost && !ses) {
+      telegramFromSettings(`${scheduledAt ? `🗓 Agendado para ${dayHm(scheduledAt)}` : '✅ Publicado'}: ${job.productName} (${job.path.split('/').pop()})${result.linkedProduct ? `\n🛒 ${result.linkedProduct.slice(0, 80)}` : ''}`);
     }
   } else if (result.clickedPublish || (result.aborted && job.step === 'Publicando')) {
     // Falhou DEPOIS de clicar em Publicar: o vídeo pode ter saído. Não tenta de novo (evita post duplicado).
-    if (job.tabId && !result.aborted) rt.staleTabId = job.tabId;
-    if (v) state.videos[job.path] = { ...v, status: 'unconfirmed', failedAt: now, lastError: result.error };
+    if (job.tabId && !result.aborted && !ses) rt.staleTabId = job.tabId;
+    if (v) state.videos[job.path] = { ...v, status: 'unconfirmed', failedAt: now, lastError: result.error, ...(job.scheduleAt ? { scheduledFor: result.scheduledAt || job.scheduleAt } : {}) };
+    // pode ter sido agendado: o próximo horário não encosta neste
+    if (job.scheduleAt) rt.lastSlotAt = Math.max(rt.lastSlotAt || 0, result.scheduledAt || job.scheduleAt);
+    if (ses) ses.nextJobAt = now + humanGap();
     addHistory(state, {
       status: 'unconfirmed', product: job.product, productName: job.productName, video: job.path, caption: job.caption,
-      error: result.error + ' — confira em "Meus posts" no TikTok Studio se o vídeo saiu.', step: result.step, diag: result.diag, durationMs, attempt: job.attempt, log: result.log,
+      error: result.error + (job.scheduleAt ? ' — confira em "Publicações" no TikTok Studio se o vídeo ficou agendado.' : ' — confira em "Meus posts" no TikTok Studio se o vídeo saiu.'), step: result.step, diag: result.diag, durationMs, attempt: job.attempt, log: result.log,
       linkedProduct: result.linkedProduct, shot: result.shot,
     });
     rt.retry = null;
-    if (rt.running) rt.nextRunAt = computeNextRun(now, s);
-    notify('AutoPoster: confira o último post', `Cliquei em Publicar, mas não vi a confirmação (${job.productName}). Confira no TikTok Studio; não vou repetir esse vídeo.`);
+    if (rt.running && s.publishMode !== 'schedule') rt.nextRunAt = computeNextRun(now, s);
+    notify('AutoPoster: confira o último post', `Cliquei em ${job.scheduleAt ? 'Agendar' : 'Publicar'}, mas não vi a confirmação (${job.productName}). Confira no TikTok Studio; não vou repetir esse vídeo.`);
   } else {
-    if (job.tabId && !result.aborted) rt.staleTabId = job.tabId;
+    if (job.tabId && !result.aborted && !ses) rt.staleTabId = job.tabId;
+    if (ses) ses.failed = (ses.failed || 0) + 1;
     rt.consecutiveFailures = (rt.consecutiveFailures || 0) + 1;
     const willRetry = job.attempt <= (s.maxRetries ?? 1);
     if (!willRetry && v) state.videos[job.path] = { ...v, status: 'failed', failedAt: now, lastError: result.error };
@@ -692,13 +832,16 @@ async function finishJob(state, result) {
     });
     if (rt.running) {
       if (rt.consecutiveFailures >= (s.pauseAfterFailures || 3)) {
+        if (ses) await endSession(state, 'pausado após falhas seguidas', { quiet: true });
         rt.running = false;
         rt.nextRunAt = null;
+        rt.nextSessionAt = null;
         rt.pausedReason = 'failures';
         notify('AutoPoster pausado ⚠️', `${rt.consecutiveFailures} falhas seguidas. Último erro: ${result.error}`);
       } else {
         rt.retry = willRetry ? { path: job.path, attempt: job.attempt } : null;
         rt.nextRunAt = now + (willRetry ? 3 : 10) * MIN;
+        if (ses) ses.nextJobAt = now + (willRetry ? 3 : 2) * MIN;
         notify('AutoPoster: falha ao postar', `${result.step || ''}: ${result.error}${willRetry ? ' — vou tentar de novo em 3 min.' : ''}`);
       }
     }
@@ -706,7 +849,8 @@ async function finishJob(state, result) {
   await saveAll(state);
   syncPower(rt, s);
 
-  if (job.tabId && (result.ok ? s.closeTabAfter : false)) {
+  // na sessão, a aba continua aberta para o próximo vídeo (é fechada no fim da sessão)
+  if (job.tabId && !ses && (result.ok ? s.closeTabAfter : false)) {
     setTimeout(() => closeTikTokTab(job.tabId), 4000);
   }
 }
@@ -733,23 +877,40 @@ async function focusTab(tabId) {
   } catch (_) { /* aba fechada */ }
 }
 
+// O depurador fica ligado na aba durante a postagem inteira (a faixa "AutoPoster está depurando
+// este navegador" aparece uma vez, sem mexer no layout no meio dos cliques). Só o domínio de
+// entrada (mouse/teclado) é usado: nada de scripts injetados por ele.
+const attached = new Set();
+chrome.debugger.onDetach.addListener((src) => { if (src.tabId) attached.delete(src.tabId); });
+async function cdpAttach(tabId) {
+  if (attached.has(tabId)) return;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+  } catch (e) {
+    if (!/already attached/i.test(String(e?.message))) throw e;
+  }
+  attached.add(tabId);
+  await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+}
+async function cdpRelease(tabId) {
+  if (!tabId) return;
+  const was = attached.delete(tabId);
+  try { await chrome.debugger.detach({ tabId }); } catch (_) { if (was) log('detach'); }
+}
+const attachError = (e) => `não consegui usar o mouse/teclado do Chrome (${e.message}). Feche as Ferramentas do desenvolvedor (F12) nessa aba, se estiverem abertas.`;
+
 async function cdpType(tabId, actions) {
   if (!tabId) return { ok: false, error: 'aba desconhecida' };
   const target = { tabId };
-  try {
-    await chrome.debugger.attach(target, '1.3');
-  } catch (e) {
-    return { ok: false, error: `não consegui usar o teclado do Chrome (${e.message}). Feche as Ferramentas do desenvolvedor (F12) nessa aba, se estiverem abertas.` };
-  }
+  try { await cdpAttach(tabId); } catch (e) { return { ok: false, error: attachError(e) }; }
   try {
     // Teclas de comando (Ctrl+A, Backspace, Enter) só valem com a página "em foco":
     // traz a aba para a frente no Chrome e liga o modo de foco do próprio Chrome.
     await focusTab(tabId);
     await chrome.debugger.sendCommand(target, 'Page.bringToFront').catch(() => {});
-    await chrome.debugger.sendCommand(target, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
-    await sleep(400);
+    await sleep(250);
     for (const a of actions) {
-      if (a.text != null) {
+      if (a.text) {
         await chrome.debugger.sendCommand(target, 'Input.insertText', { text: a.text });
       } else if (a.key) {
         const k = KEYS[a.key];
@@ -763,8 +924,38 @@ async function cdpType(tabId, actions) {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: 'falha ao digitar: ' + (e.message || e) };
-  } finally {
-    try { await chrome.debugger.detach(target); } catch (_) { /* já solto */ }
+  }
+}
+
+// Mouse de verdade: o ponteiro percorre o caminho, para em cima do alvo, pressiona e solta.
+// Para o site, é idêntico a uma pessoa usando o mouse (eventos "confiáveis").
+async function cdpMouse(tabId, { points = [], x, y, hover = 200, hold = 90, wheel = null }) {
+  if (!tabId) return { ok: false, error: 'aba desconhecida' };
+  const target = { tabId };
+  try { await cdpAttach(tabId); } catch (e) { return { ok: false, error: attachError(e) }; }
+  try {
+    await focusTab(tabId);
+    const zoom = await chrome.tabs.getZoom(tabId).catch(() => 1) || 1;
+    const Z = (n) => Math.round(n * zoom * 100) / 100;
+    for (const p of points) {
+      await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: Z(p.x), y: Z(p.y), button: 'none', buttons: 0 });
+      await sleep(Math.max(5, Math.min(120, p.w || 20)));
+    }
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: Z(x), y: Z(y), button: 'none', buttons: 0 });
+    if (wheel) {
+      for (const dy of wheel.deltas || []) {
+        await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: Z(x), y: Z(y), deltaX: 0, deltaY: dy, button: 'none', buttons: 0 });
+        await sleep(40 + Math.random() * 90);
+      }
+      return { ok: true };
+    }
+    await sleep(Math.max(30, Math.min(1500, hover)));
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: Z(x), y: Z(y), button: 'left', buttons: 1, clickCount: 1 });
+    await sleep(Math.max(30, Math.min(400, hold)));
+    await chrome.debugger.sendCommand(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: Z(x), y: Z(y), button: 'left', buttons: 0, clickCount: 1 });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: 'falha no clique: ' + (e.message || e) };
   }
 }
 
@@ -798,6 +989,7 @@ async function finishSync(state, result) {
   result.log = result.log && result.log.length ? result.log : fmtEntries(job.log);
   if (!result.ok && job.tabId) result.shot = await screenshot(job.tabId);
   rt.currentJob = null;
+  if (job.tabId) cdpRelease(job.tabId);
   const now = Date.now();
   let msg;
   if (result.ok) {
@@ -823,11 +1015,13 @@ async function lateResult(state, result) {
   if (!rec || rec.dryRun || !result.ok) return;
   const v = state.videos[rec.path];
   const now = Date.now();
-  if (v) state.videos[rec.path] = { ...v, status: 'posted', postedAt: now, caption: rec.caption };
+  const at = rec.scheduleAt ? (Number(result.scheduledAt) || rec.scheduleAt) : null;
+  if (v) state.videos[rec.path] = at ? { ...v, status: 'scheduled', scheduledFor: at, postedAt: at, caption: rec.caption } : { ...v, status: 'posted', postedAt: now, caption: rec.caption };
+  if (at) state.runtime.lastSlotAt = Math.max(state.runtime.lastSlotAt || 0, at);
   const product = state.catalog[rec.product];
   if (product) state.catalog[rec.product] = { ...product, lastPostedAt: now, ...rememberCaption(product, { text: rec.caption, ...(rec.captionMeta || {}) }) };
   if (state.runtime.retry?.path === rec.path) state.runtime.retry = null;
-  addHistory(state, { status: 'posted', product: rec.product, productName: rec.productName, video: rec.path, caption: rec.caption, url: result.url, log: result.log, linkedProduct: result.linkedProduct, late: true });
+  addHistory(state, { status: at ? 'scheduled' : 'posted', publishAt: at || now, product: rec.product, productName: rec.productName, video: rec.path, caption: rec.caption, url: result.url, log: result.log, linkedProduct: result.linkedProduct, late: true });
   await saveAll(state);
 }
 
@@ -873,6 +1067,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     focusTab(sender.tab?.id).then(() => sendResponse({ ok: true }));
     return true;
   }
+  if (msg.type === 'cdp-mouse') {
+    cdpMouse(sender.tab?.id, msg).then(sendResponse, (e) => sendResponse({ ok: false, error: String(e?.message || e) }));
+    return true;
+  }
   if (msg.type === 'cdp-type') {
     cdpType(sender.tab?.id, msg.actions || []).then(sendResponse, (e) => sendResponse({ ok: false, error: String(e?.message || e) }));
     return true;
@@ -910,18 +1108,41 @@ async function command(name, p) {
   switch (name) {
     case 'ping':
       return { ok: true };
-    case 'start':
+    case 'start': {
       rt.running = true;
       rt.consecutiveFailures = 0;
+      rt.infraFailures = 0;
       rt.pausedReason = null;
       rt.nextRunAt = Date.now() + MIN;
+      rt.session = null;
+      if (state.settings.publishMode === 'schedule') {
+        // se a agenda já cobre até a próxima sessão, espera por ela; senão agenda já
+        const nextBase = computeNextSession(Date.now(), { ...state.settings, sessionJitterMinutes: 0 });
+        const covered = rt.lastSlotAt && nextBase && rt.lastSlotAt >= nextBase;
+        rt.nextSessionAt = covered ? computeNextSession(Date.now(), state.settings) : Date.now() + MIN;
+      }
       await save({ runtime: rt });
       await ensureAlarm();
       syncPower(rt, state.settings);
+      return { ok: true, nextSessionAt: rt.nextSessionAt || null };
+    }
+    case 'session-now':
+      if (rt.currentJob) return { ok: false, error: 'Espere a postagem em andamento terminar.' };
+      if (state.settings.publishMode !== 'schedule') return { ok: false, error: 'O modo agendamento está desligado.' };
+      if (!rt.running) {
+        rt.running = true;
+        rt.consecutiveFailures = 0;
+        rt.pausedReason = null;
+        await ensureAlarm();
+        syncPower(rt, state.settings);
+      }
+      if (!rt.session) await beginSession(state);
       return { ok: true };
     case 'pause':
+      if (rt.session) await endSession(state, 'pausado por você', { quiet: true });
       rt.running = false;
       rt.nextRunAt = null;
+      rt.nextSessionAt = null;
       rt.retry = null;
       rt.pausedReason = null;
       await save({ runtime: rt });
@@ -982,10 +1203,17 @@ async function command(name, p) {
     case 'save-settings': {
       const settings = { ...state.settings, ...p.settings };
       await save({ settings });
-      if (rt.running && rt.nextRunAt && p.reschedule) {
+      if (rt.running && rt.nextRunAt && p.reschedule && settings.publishMode !== 'schedule') {
         rt.nextRunAt = computeNextRun(Date.now(), settings);
-        await save({ runtime: rt });
       }
+      // trocou de modo ou os horários das sessões: recalcula a próxima sessão
+      if (rt.running && !rt.session && settings.publishMode === 'schedule'
+        && (state.settings.publishMode !== 'schedule' || state.settings.sessionTimes !== settings.sessionTimes || !rt.nextSessionAt)) {
+        rt.nextSessionAt = computeNextSession(Date.now(), settings);
+      }
+      if (settings.publishMode !== 'schedule' && rt.session) await endSession(state, 'modo agendamento desligado', { quiet: true });
+      if (rt.running && settings.publishMode !== 'schedule' && !rt.nextRunAt) rt.nextRunAt = Date.now() + MIN;
+      await save({ runtime: rt });
       return { ok: true };
     }
     // Cria ou edita um produto do catálogo. Opcionalmente já liga a uma pasta / vídeos.

@@ -16,7 +16,11 @@ export const DEFAULT_LABELS = {
     'divulgar conteudo', 'disclose video content', 'disclose post content', 'content disclosure',
   ],
   brandedContent: ['conteudo de marca', 'branded content'],
-  post: ['publicar', 'post'],
+  post: ['publicar', 'post', 'agendar', 'schedule'],
+  // "Quando publicar: Agora / Agendar"
+  scheduleOption: ['agendar', 'schedule'],
+  allowSchedule: ['permitir', 'allow'],
+  whenToPost: ['quando publicar', 'when to post'],
   confirmPost: ['publicar agora', 'post now', 'publicar mesmo assim', 'post anyway', 'continuar', 'continue'],
   dismiss: ['entendi', 'got it', 'agora nao', 'not now', 'ok', 'fechar', 'close', 'pular', 'skip'],
   discardDraft: ['eliminar', 'descartar', 'excluir', 'discard', 'delete', 'nao, obrigado', 'no, thanks'],
@@ -34,6 +38,7 @@ export const DEFAULT_LABELS = {
     'video publicado', 'seu video foi publicado', 'publicacao concluida', 'your video has been uploaded',
     'video published', 'your video is being uploaded', 'gerenciar seus posts', 'manage your posts',
     'enviar outro video', 'upload another video', 'post publicado',
+    'video agendado', 'publicacao agendada', 'post agendado', 'agendado com sucesso', 'your video has been scheduled', 'video scheduled', 'post scheduled',
   ],
 };
 
@@ -49,7 +54,14 @@ export function mergeLabels(saved) {
 }
 
 export const DEFAULT_SETTINGS = {
-  intervalMinutes: 60,          // 5, 10, 15, 20, 30 ou 60
+  // 'schedule': a extensão abre o TikTok Studio só nas sessões e AGENDA os próximos posts
+  //             (quem publica na hora certa são os servidores do TikTok)
+  // 'now':      abre o TikTok Studio a cada post e publica na hora
+  publishMode: 'schedule',
+  sessionTimes: '09:00, 14:00, 20:00', // horários das sessões de agendamento
+  sessionJitterMinutes: 20,     // cada sessão começa de 0 a N min depois do horário (nunca no minuto exato)
+  perSessionMax: 6,             // máximo de vídeos agendados por sessão
+  intervalMinutes: 60,          // minutos entre uma publicação e a próxima (5 a 1440)
   jitterMinutes: 8,             // variação aleatória (+/-) para não postar sempre no mesmo minuto
   activeStartHour: 0,           // 0–23
   activeEndHour: 24,            // 1–24 (24 = até meia-noite)
@@ -65,7 +77,7 @@ export const DEFAULT_SETTINGS = {
   maxRetries: 1,                // novas tentativas do mesmo vídeo em caso de falha
   pauseAfterFailures: 3,        // pausa tudo após N falhas seguidas
   keepAwake: true,
-  keepScreenOn: true,           // manter a tela ligada enquanto roda (evita o Windows "adormecer" rede/Chrome)              // impedir o computador de suspender enquanto estiver rodando
+  keepScreenOn: true,           // manter a tela ligada enquanto roda (evita o Windows "adormecer" rede/Chrome)
   telegramEnabled: false,       // avisos no celular pelo Telegram
   telegramToken: '',
   telegramChatId: '',

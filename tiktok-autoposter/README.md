@@ -95,17 +95,55 @@ O painel abre no tema escuro e mostra a **configuração passo a passo**:
 - **Modelos próprios (avançado):** separe os modelos com uma linha `---`. Use `{opção 1|opção 2}` para variar, e `{produto}`, `{beneficio}` e `{beneficio2}` para inserir o nome e os benefícios.
 - **Legenda fixa de um vídeo:** crie um `.txt` com o mesmo nome do vídeo. Se o texto já tiver hashtags, nenhuma é acrescentada.
 
-## Regras de agendamento
+## Modo agendamento (padrão desde a versão 2.0)
 
-- Intervalo configurável (5, 10, 15, 20, 30 ou 60 min) com **variação aleatória** (padrão ±8 min).
-- **Faixa de horário** e **limite diário** configuráveis.
+A extensão **não abre mais o TikTok Studio a cada post**. Ela trabalha em **sessões**:
+
+1. Nos **horários das sessões** (padrão: 09:00, 14:00 e 20:00, cada uma começando de 0 a 20 min depois, ao acaso), ela abre o TikTok Studio.
+2. Na sessão, envia um vídeo por vez **na mesma aba**, com legenda, produto e “Conteúdo de marca”, escolhe **Quando publicar → Agendar**, a **data** e a **hora**, e clica em **Agendar**. Entre um vídeo e outro, faz uma pausa de 2 a 5 min.
+3. Ela agenda até cobrir o período até a próxima sessão (com folga de 1h30), respeitando o **máximo de vídeos por sessão**.
+4. Quem publica na hora certa são os **servidores do TikTok**. Entre as sessões, o seu computador não faz nada e pode até estar desligado.
+
+**Resultado:** o TikTok Studio é aberto **3 vezes por dia**, em vez de 15 a 24.
+
+**Regras dos horários de publicação:**
+- Seguem o intervalo que você digita (por exemplo, 60 min), com a **variação aleatória**.
+- São arredondados para **múltiplos de 5 min**, porque o seletor de hora do TikTok só tem esses minutos.
+- Sempre ficam pelo menos **20 min no futuro**, o mínimo do TikTok.
+- Respeitam a **faixa de horário** e o **limite por dia**, contado pelo dia em que o vídeo vai ao ar.
+
+**Em Configurações:**
+- Escolha os horários das sessões e o máximo de vídeos por sessão.
+- A tela mostra quantos vídeos cada sessão vai agendar e **avisa se vai faltar post** até a próxima sessão.
+
+**Botões e telas:**
+- **Agendar agora** abre uma sessão na hora.
+- Na tela **Vídeos**, os agendados aparecem como **“Agendado”**, com o horário em que vão ao ar.
+- Depois desse horário, viram **“Publicado”**.
+
+**Pausar não cancela** o que já está agendado no TikTok. Para cancelar, apague em **TikTok Studio → Publicações**.
+
+O modo antigo continua disponível em **Configurações → Como publicar → Publicar na hora**.
+
+## Mouse e teclado de verdade (2.0)
+
+Todos os **cliques, rolagens e digitação** são feitos pelo próprio Chrome. Para o site, são eventos idênticos aos de uma pessoa.
+- O mouse se move em curva até o botão, para em cima e clica.
+- A página rola com a rodinha.
+- Os campos são digitados tecla por tecla.
+
+Enquanto a extensão trabalha na aba, o Chrome mostra a faixa **“AutoPoster começou a depurar este navegador”**. Não feche essa faixa durante uma sessão.
+
+Se as **Ferramentas do desenvolvedor (F12)** estiverem abertas na aba, o Chrome não deixa usar o mouse de verdade. Nesse caso a extensão usa o clique simulado e registra isso no log.
+
+## Regras gerais
+
 - **Rodízio de produtos:** nunca posta o mesmo produto duas vezes seguidas (quando há mais de um).
 - Cada vídeo é postado **uma única vez**. Quando os vídeos de um produto acabam, ele para; ou recomeça, se você escolher essa opção.
 - **Falhas:** a extensão tenta de novo em 3 minutos. Depois de 3 falhas seguidas, **pausa tudo** e mostra uma notificação.
-- **Sem post duplicado:** se ela clicou em *Publicar* e não viu a confirmação, o vídeo fica como **“Verificar no TikTok”** e **não é repetido**. Confira em *Meus posts* e marque **“Saiu, marcar publicado”** ou **“Voltar para a fila”**.
+- **Sem post duplicado:** se ela clicou em *Publicar* ou *Agendar* e não viu a confirmação, o vídeo fica como **“Verificar no TikTok”** e **não é repetido**. Confira no TikTok Studio e marque **“Saiu, marcar publicado”** ou **“Voltar para a fila”**.
 - **Cancelar** ou **tempo esgotado** (35 min, ou 6 min sem resposta da página) fecham a aba do TikTok na hora, para nada ser publicado depois.
 - A pasta é **lida de novo antes de cada post**: vídeos novos entram na fila sozinhos.
-- Funciona com a aba do TikTok em **segundo plano**. As esperas são feitas pela extensão, para o Chrome não atrasá-las.
 
 ## Para rodar 24 horas
 
@@ -128,9 +166,9 @@ O painel abre no tema escuro e mostra a **configuração passo a passo**:
 ## Velocidade (modo humano)
 
 Em **Configurações → Publicação → Velocidade**, o padrão é **Humana**:
-- o mouse vai até o botão e para em cima antes de clicar;
+- o mouse de verdade vai até o botão em curva e para em cima antes de clicar;
 - a legenda é escrita aos poucos, de 1 a 3 palavras por vez;
-- a busca do produto é digitada letra por letra;
+- a busca do produto e o nome no carrinho são digitados aos poucos, com o teclado do Chrome;
 - há pausas entre as etapas.
 
 Cada post leva alguns minutos a mais. Se quiser, troque para **Normal**, que é mais rápido.

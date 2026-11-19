@@ -90,6 +90,8 @@ async function main() {
   };
   const nextTikTokPage = () => ctx.waitForEvent('page', { timeout: 30000 });
 
+  // este teste cobre o modo "publicar na hora" (o modo agendamento tem o seu: test/e2e-schedule.cjs)
+  await cmd('save-settings', { settings: { publishMode: 'now' } });
   console.log('0) Visual inicial (tema escuro padrão)');
   assert((await dash.evaluate(() => document.documentElement.dataset.theme)) === 'dark', 'tema escuro por padrão');
   assert(await dash.isVisible('#setupCard'), 'mostra a configuração em 4 passos');

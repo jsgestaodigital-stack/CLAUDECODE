@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS, DEFAULT_LABELS, mergeLabels } from '../lib/defaults.js';
-import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey, productKeyOf, itemOf } from '../lib/scheduler.js';
+import { previewQueue, countPostedToday, isLinkReady, productBlocked, linkKey, productKeyOf, itemOf, parseSessionTimes, fmtSessionTimes, sessionLoad, nextSlot } from '../lib/scheduler.js';
 import { previewSeries, NICHES } from '../lib/captions.js';
 import { getRootHandle, saveRootHandle, permissionState } from '../lib/fsaccess.js';
 import { resolveProductLink, extractProductId, firstUrl } from '../lib/productlink.js';
@@ -28,8 +28,10 @@ const TITLES = {
 
 const JOB_STEPS = [
   'Abrindo o TikTok Studio', 'Aguardando a página de upload', 'Lendo o vídeo da pasta', 'Enviando o vídeo',
-  'Escrevendo a legenda', 'Aguardando o envio terminar', 'Vinculando o produto (carrinho)', 'Marcando "Conteúdo de marca"', 'Publicando',
+  'Aguardando o envio terminar', 'Escrevendo a legenda', 'Vinculando o produto (carrinho)', 'Marcando "Conteúdo de marca"',
+  'Escolhendo data e hora (Agendar)', 'Publicando', 'Agendando',
 ];
+const isSched = () => S.settings.publishMode === 'schedule';
 
 // ---------- comunicação ----------
 async function send(name, payload) {
@@ -91,6 +93,7 @@ const STATUS = {
   pending: ['Pendente', 'info'], posted: ['Publicado', 'ok'], failed: ['Falhou', 'bad'],
   skipped: ['Pulado', ''], missing: ['Sumiu da pasta', 'warn'], 'dry-run': ['Teste ok', 'violet'], idle: ['Fila vazia', 'warn'],
   unconfirmed: ['Verificar no TikTok', 'warn'], sync: ['Vitrine importada', 'ok'],
+  scheduled: ['Agendado', 'violet'], session: ['Sessão', 'info'],
 };
 const pill = (st) => `<span class="pill ${STATUS[st]?.[1] || ''}">${STATUS[st]?.[0] || esc(st)}</span>`;
 
@@ -117,7 +120,7 @@ function productOptions(selected, inheritLabel) {
 function setupSteps() {
   const ready = Object.values(S.catalog).filter((p) => p.enabled !== false && isLinkReady(p));
   const vids = Object.values(S.videos).filter((v) => v.status !== 'missing').length;
-  const tested = !!S.history.find((h) => h.status === 'dry-run' || h.status === 'posted');
+  const tested = !!S.history.find((h) => h.status === 'dry-run' || h.status === 'posted' || h.status === 'scheduled');
   const queued = previewQueue(S, 1).length > 0;
   const withVideos = Object.values(S.folders).filter((f) => Object.values(S.videos).some((v) => v.folder === f.folder && v.status !== 'missing'));
   const linked = withVideos.filter((f) => f.catalogKey && S.catalog[f.catalogKey]).length;
@@ -175,12 +178,14 @@ function renderChrome() {
   }
   $('#btnNow').disabled = busy;
   $('#btnDry').disabled = busy;
+  $('#btnSession').hidden = !isSched();
+  $('#btnSession').disabled = busy || !!rt.session;
   $('#viewTitle').textContent = TITLES[view][0];
   $('#viewSub').textContent = TITLES[view][1];
 
   $('#sideDot').className = 'dot' + (busy ? ' busy' : rt.running ? ' on' : '');
-  $('#sideState').textContent = busy ? 'Postando agora' : rt.running ? 'Rodando' : 'Pausado';
-  $('#sideInfo').textContent = `A cada ${fmtMinutes(S.settings.intervalMinutes)} · ${String(S.settings.activeStartHour).padStart(2, '0')}h às ${String(S.settings.activeEndHour).padStart(2, '0')}h`;
+  $('#sideState').textContent = busy ? (rt.currentJob?.scheduleAt ? 'Agendando agora' : 'Postando agora') : rt.session ? 'Sessão de agendamento' : rt.running ? 'Rodando' : 'Pausado';
+  $('#sideInfo').textContent = `${isSched() ? '🗓 Agenda ' : ''}1 a cada ${fmtMinutes(S.settings.intervalMinutes)} · ${String(S.settings.activeStartHour).padStart(2, '0')}h às ${String(S.settings.activeEndHour).padStart(2, '0')}h`;
 
   const needs = Object.values(S.catalog).filter((p) => p.enabled !== false && !isLinkReady(p)).length;
   const pb = $('#navProdBadge');
@@ -210,7 +215,7 @@ function renderBanner() {
   } else if (folderName && folderPerm === 'granted' && writePerm !== 'granted') {
     html = `<div class="banner warn">${icon('shield')}<div class="grow"><b>Ative a cópia de segurança automática</b><span class="muted small">Com a permissão de edição da pasta, a extensão grava suas configurações e produtos no arquivo “_autoposter-config.json” dentro da pasta de vídeos. Assim, ao instalar uma versão nova, tudo volta sozinho.</span></div><button class="btn primary small" data-act="enable-backup">Ativar</button></div>`;
   } else if (S.runtime.running && S.runtime.infraFailures > 0) {
-    html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>O TikTok não abriu na última tentativa (${S.runtime.infraFailures}x)</b><span class="muted small">Não é problema dos vídeos. A extensão tenta de novo sozinha${S.runtime.nextRunAt ? ` por volta das ${fmtTime(S.runtime.nextRunAt)}` : ''}. Confira a internet e se o computador está ligado com a tela acesa.</span></div></div>`;
+    html = `<div class="banner warn">${icon('alert')}<div class="grow"><b>O TikTok não abriu na última tentativa (${S.runtime.infraFailures}x)</b><span class="muted small">Não é problema dos vídeos. A extensão tenta de novo sozinha${(isSched() ? S.runtime.nextSessionAt : S.runtime.nextRunAt) ? ` por volta das ${fmtTime(isSched() ? S.runtime.nextSessionAt : S.runtime.nextRunAt)}` : ''}. Confira a internet e se o computador está ligado com a tela acesa.</span></div></div>`;
   } else if (!S.runtime.running && S.runtime.pausedReason === 'logged-out') {
     html = `<div class="banner err">${icon('lock')}<div class="grow"><b>Pausado: o TikTok está deslogado neste Chrome</b><span class="muted small">Entre na sua conta do TikTok e depois clique em Iniciar.</span></div><a class="btn small" href="https://www.tiktok.com/login" target="_blank" rel="noopener">Entrar no TikTok</a></div>`;
   } else if (!S.runtime.running && S.runtime.consecutiveFailures >= (S.settings.pauseAfterFailures || 3)) {
@@ -228,8 +233,9 @@ function stats() {
   const vids = Object.values(S.videos);
   const pending = vids.filter((v) => v.status === 'pending' && !productBlocked(itemOf(S, v), S.settings)).length;
   const posted = vids.filter((v) => v.status === 'posted').length;
+  const scheduled = vids.filter((v) => v.status === 'scheduled').length;
   const fails = S.history.filter((h) => h.status === 'failed' && h.ts > Date.now() - 864e5).length;
-  return { pending, posted, fails };
+  return { pending, posted, scheduled, fails };
 }
 
 function renderOverview() {
@@ -256,13 +262,15 @@ function renderOverview() {
   const withQueue = new Set(Object.values(S.videos).filter((v) => v.status === 'pending' && !productBlocked(itemOf(S, v), S.settings)).map((v) => productKeyOf(S, v))).size;
   $('#stProducts').textContent = `de ${withQueue} produto${withQueue === 1 ? '' : 's'}`;
   $('#stFails').textContent = st.fails;
-  $('#stTotal').textContent = `${st.posted} publicados no total`;
+  $('#stTotal').textContent = `${st.posted} publicados${st.scheduled ? ` · ${st.scheduled} agendados` : ''} no total`;
   tickCountdown();
 
   const job = S.runtime.currentJob;
   $('#jobCard').hidden = !job;
   if (job) {
-    $('#jobTitle').textContent = job.type === 'sync' ? 'Importando a sua vitrine do TikTok Studio (nada é publicado)' : `${job.dryRun ? 'Testando (sem publicar)' : 'Postando'}: ${job.productName || job.product} — ${job.path.split('/').pop()}`;
+    const verb = job.dryRun ? 'Testando (sem publicar)' : job.scheduleAt ? `Agendando para ${fmtWhen(job.scheduleAt)}` : 'Postando';
+    const ses = S.runtime.session;
+    $('#jobTitle').textContent = job.type === 'sync' ? 'Importando a sua vitrine do TikTok Studio (nada é publicado)' : `${ses && job.sessionId === ses.id ? `Sessão (${ses.done + 1}º vídeo) · ` : ''}${verb}: ${job.productName || job.product} — ${job.path.split('/').pop()}`;
     $('#jobStep').textContent = job.step || '';
     const idx = Math.max(0, JOB_STEPS.indexOf(job.step));
     $('#jobBar').style.width = `${Math.round(((idx + 1) / JOB_STEPS.length) * 100)}%`;
@@ -284,13 +292,29 @@ function renderOverview() {
     : `<div class="empty">Nenhuma pasta escolhida ainda.<br><button class="btn primary" data-act="pick">${icon('folder')}Escolher pasta</button></div>`;
 
   // próximos
-  const q = previewQueue(S, 6);
   const interval = Number(S.settings.intervalMinutes);
-  const t = S.runtime.nextRunAt && S.runtime.running ? S.runtime.nextRunAt : null;
-  $('#intervalInfo').textContent = `a cada ${fmtMinutes(interval)} (±${S.settings.jitterMinutes} min)`;
-  $('#upcoming').innerHTML = q.length
-    ? q.map((it, i) => `<li><span class="n">${i + 1}</span><span class="t">${t ? '~' + fmtTime(t + i * interval * 60000) : '—'}</span>
-        <div style="min-width:0"><div class="p">${esc(nameOf(it.product) || it.product)}</div><div class="f">📁 ${esc(it.video.folder)} · ${esc(it.video.name)}</div></div></li>`).join('')
+  $('#intervalInfo').textContent = `1 a cada ${fmtMinutes(interval)} (±${S.settings.jitterMinutes} min)`;
+  const rows = [];
+  if (isSched()) {
+    // já agendados no TikTok (horário exato) + os próximos que a sessão vai agendar (estimativa)
+    const sched = Object.values(S.videos).filter((v) => v.status === 'scheduled' && v.scheduledFor > Date.now()).sort((a, b) => a.scheduledFor - b.scheduledFor);
+    for (const v of sched.slice(0, 8)) rows.push({ t: fmtWhen(v.scheduledFor), product: productKeyOf(S, v), video: v, tag: '<span class="pill violet small">no TikTok ✓</span>' });
+    let last = Math.max(S.runtime.lastSlotAt || 0, ...sched.map((v) => v.scheduledFor));
+    const hist = [...S.history];
+    for (const it of previewQueue(S, Math.max(0, 8 - rows.length))) {
+      const t = nextSlot({ lastSlotAt: last || null, now: Date.now(), settings: { ...S.settings, jitterMinutes: 0 }, history: hist, leadMin: 40 });
+      if (!t) break;
+      hist.push({ status: 'scheduled', publishAt: t, ts: Date.now() });
+      last = t;
+      rows.push({ t: '~' + fmtWhen(t), product: it.product, video: it.video, tag: '<span class="muted small">próxima sessão</span>' });
+    }
+  } else {
+    const t = S.runtime.nextRunAt && S.runtime.running ? S.runtime.nextRunAt : null;
+    previewQueue(S, 6).forEach((it, i) => rows.push({ t: t ? '~' + fmtTime(t + i * interval * 60000) : '—', product: it.product, video: it.video, tag: '' }));
+  }
+  $('#upcoming').innerHTML = rows.length
+    ? rows.map((it, i) => `<li><span class="n">${i + 1}</span><span class="t">${esc(it.t)}</span>
+        <div style="min-width:0"><div class="p">${esc(nameOf(it.product) || it.product)} ${it.tag}</div><div class="f">📁 ${esc(it.video.folder)} · ${esc(it.video.name)}</div></div></li>`).join('')
     : `<div class="empty">${Object.keys(S.folders).length ? 'Sem vídeos prontos para postar. Ligue as pastas a produtos do catálogo (tela Vídeos).' : 'Escolha a pasta de vídeos para montar a fila.'}</div>`;
 
   $('#recent').innerHTML = historyHtml(S.history.slice(0, 5)) || '<div class="empty">Nenhuma atividade ainda.</div>';
@@ -300,7 +324,18 @@ function tickCountdown() {
   const rt = S.runtime;
   const el = $('#stNext');
   if (!el || view !== 'overview') return;
-  if (rt.currentJob) { el.textContent = 'postando…'; $('#stNextAt').textContent = rt.currentJob.step || ''; return; }
+  $('#stNextLabel').textContent = isSched() ? 'Próxima sessão de agendamento' : 'Próximo post';
+  if (rt.currentJob) { el.textContent = rt.currentJob.scheduleAt ? 'agendando…' : 'postando…'; $('#stNextAt').textContent = rt.currentJob.step || ''; return; }
+  if (isSched()) {
+    const sched = Object.values(S.videos).filter((v) => v.status === 'scheduled' && v.scheduledFor > Date.now());
+    const until = sched.length ? Math.max(...sched.map((v) => v.scheduledFor)) : null;
+    const cover = sched.length ? `${sched.length} agendado${sched.length > 1 ? 's' : ''} no TikTok, até ${fmtWhen(until)}` : 'nada agendado no TikTok ainda';
+    if (rt.session) { el.textContent = 'em sessão'; $('#stNextAt').textContent = `próximo vídeo ~${fmtTime(rt.session.nextJobAt || Date.now())} · ${cover}`; return; }
+    if (!rt.running || !rt.nextSessionAt) { el.textContent = 'pausado'; $('#stNextAt').textContent = `clique em Iniciar · ${cover}`; return; }
+    el.textContent = fmtCountdown(rt.nextSessionAt - Date.now());
+    $('#stNextAt').textContent = `por volta de ${fmtTime(rt.nextSessionAt)} · ${cover}`;
+    return;
+  }
   if (!rt.running || !rt.nextRunAt) { el.textContent = 'pausado'; $('#stNextAt').textContent = 'clique em Iniciar'; return; }
   el.textContent = fmtCountdown(rt.nextRunAt - Date.now());
   $('#stNextAt').textContent = `por volta de ${fmtTime(rt.nextRunAt)}`;
@@ -315,8 +350,10 @@ function historyHtml(list) {
       <div>
         <div class="title">${h.productName ? `<b>${esc(h.productName)}</b> · ` : ''}<span class="muted">${esc(file)}</span>${h.attempt > 1 ? ` <span class="muted small">(tentativa ${h.attempt})</span>` : ''}</div>
         ${h.caption ? `<div class="cap">${esc(h.caption)}</div>` : ''}
+        ${h.status === 'scheduled' && h.publishAt ? `<div class="meta">🗓 ${h.publishAt > Date.now() ? 'Vai ao ar' : 'Foi ao ar'} ${fmtWhen(h.publishAt).toLowerCase()} (agendado no TikTok)</div>` : ''}
+        ${h.status === 'session' && h.step ? `<div class="meta">${esc(h.step)}</div>` : ''}
         ${h.linkedProduct ? `<div class="meta">🛒 Produto vinculado: <b>${esc(h.linkedProduct)}</b></div>` : ''}
-        ${h.error ? `<div class="err">${h.step ? esc(h.step) + ': ' : ''}${esc(h.error)}${h.willRetry ? ' — nova tentativa em 3 min' : ''}</div>` : ''}
+        ${h.error && h.status !== 'session' ? `<div class="err">${h.step ? esc(h.step) + ': ' : ''}${esc(h.error)}${h.willRetry ? ' — nova tentativa em 3 min' : ''}</div>` : ''}
         ${tech}
       </div>
       <div>${pill(h.status)}</div>
@@ -420,7 +457,7 @@ function renderQueue() {
     .filter((v) => ui.queueFilter === 'all' || v.status === ui.queueFilter)
     .filter((v) => !ui.queueFolder || v.folder === ui.queueFolder)
     .filter((v) => !q || v.path.toLowerCase().includes(q))
-    .sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0) || a.path.localeCompare(b.path, 'pt-BR', { numeric: true }));
+    .sort((a, b) => (ui.queueFilter === 'scheduled' ? (a.scheduledFor || 0) - (b.scheduledFor || 0) : (b.postedAt || 0) - (a.postedAt || 0)) || a.path.localeCompare(b.path, 'pt-BR', { numeric: true }));
 
   if (!list.length) {
     $('#queueTable').innerHTML = '<tbody><tr><td><div class="empty">Nenhum vídeo aqui.</div></td></tr></tbody>';
@@ -435,12 +472,12 @@ function renderQueue() {
       return `<tr>
       <td class="file" title="${esc(v.path)}">${esc(v.name)}${v.hasTxt ? ' <span class="pill info" title="tem legenda própria (.txt)">txt</span>' : ''}<div class="muted small">📁 ${esc(v.folder)}${v.size ? ' · ' + fmtSize(v.size) : ''}</div>${v.lastError ? `<div class="small" style="color:var(--red);white-space:normal">${esc(v.lastError)}</div>` : ''}</td>
       <td style="min-width:220px"><select data-assign-video="${esc(v.path)}" aria-label="Produto do vídeo ${esc(v.name)}">${productOptions(v.catalogKey && S.catalog[v.catalogKey] ? v.catalogKey : '', `Igual à pasta (${folderItem ? folderItem.displayName : 'sem produto'})`)}</select>${blocked ? `<div class="small" style="color:var(--yellow)">${reason}</div>` : ''}</td>
-      <td>${pill(v.status)}${v.postedAt ? `<div class="muted small">${fmtWhen(v.postedAt)}</div>` : ''}</td>
+      <td>${pill(v.status)}${v.status === 'scheduled' && v.scheduledFor ? `<div class="muted small">vai ao ar ${fmtWhen(v.scheduledFor).toLowerCase()}</div>` : v.postedAt ? `<div class="muted small">${fmtWhen(v.postedAt)}</div>` : ''}</td>
       <td><div class="row-actions">
         ${v.status === 'pending' && !blocked ? `<button class="btn small" data-post="${esc(v.path)}">Postar agora</button><button class="btn small" data-dry="${esc(v.path)}">Testar</button>` : ''}
         ${v.status === 'pending' ? `<button class="btn small ghost" data-skip="${esc(v.path)}">Pular</button>` : ''}
         ${v.status === 'unconfirmed' ? `<button class="btn small" data-mark-posted="${esc(v.path)}">Saiu, marcar publicado</button>` : ''}
-        ${['failed', 'skipped', 'posted', 'unconfirmed'].includes(v.status) ? `<button class="btn small" data-requeue="${esc(v.path)}">Voltar para a fila</button>` : ''}
+        ${['failed', 'skipped', 'posted', 'unconfirmed', 'scheduled'].includes(v.status) ? `<button class="btn small" ${v.status === 'scheduled' ? 'data-requeue-sched' : 'data-requeue'}="${esc(v.path)}">Voltar para a fila</button>` : ''}
       </div></td></tr>`;
     }).join('')
   }</tbody>`;
@@ -523,9 +560,25 @@ function fillSettings() {
   f.telegramChatId.value = s.telegramChatId || '';
   $('#tgFields').hidden = !s.telegramEnabled;
   f.labels.value = JSON.stringify(s.labels, null, 2);
+  f.sessionTimes.value = s.sessionTimes || '';
+  f.perSessionMax.value = s.perSessionMax ?? 6;
+  f.sessionJitterMinutes.value = s.sessionJitterMinutes ?? 20;
+  setMode(s.publishMode || 'schedule');
   setIntervalSeg(s.intervalMinutes);
   settingsDirty = false;
 }
+// Modo de publicação: agendar pelo TikTok (sessões) ou publicar na hora.
+function setMode(m) {
+  const f = $('#settingsForm');
+  f.publishMode.value = m;
+  $$('#modeSeg button').forEach((b) => { b.classList.toggle('on', b.dataset.mode === m); b.setAttribute('aria-checked', b.dataset.mode === m); });
+  $('#sessionBox').hidden = m !== 'schedule';
+  $('#modeExplain').innerHTML = m === 'schedule'
+    ? 'A extensão abre o TikTok Studio <b>só nos horários das sessões</b> e usa o <b>Agendar</b> do próprio TikTok para deixar os próximos vídeos marcados, um a cada intervalo. Quem publica na hora certa são os servidores do TikTok — o seu computador fica quieto entre as sessões (pode até estar desligado).'
+    : 'A extensão abre o TikTok Studio <b>a cada post</b> e publica na hora. Mais aberturas por dia = mais parecido com robô. Use só se o agendamento não funcionar na sua conta.';
+  updateIntervalHint();
+}
+
 // Intervalo digitado (5 a 1440 min). Os atalhos só preenchem o campo.
 function setIntervalSeg(v) {
   const f = $('#settingsForm');
@@ -554,6 +607,24 @@ function updateIntervalHint() {
   const perDay = Math.min(byTime, max);
   $('#intervalHint').style.color = '';
   $('#intervalHint').textContent = `Um post a cada ${fmtMinutes(v)} (± a variação aleatória) · ≈ ${perDay} posts por dia${byTime > max ? ` (limitado pelo máximo de ${max})` : ''} entre ${String(start).padStart(2, '0')}h e ${String(end).padStart(2, '0')}h.`;
+  updateSessionHint();
+}
+// Mostra o que cada sessão vai agendar e avisa se o máximo por sessão deixa buracos.
+function updateSessionHint() {
+  const f = $('#settingsForm');
+  const el = $('#sessionHint');
+  if (f.publishMode.value !== 'schedule') return;
+  const times = parseSessionTimes(f.sessionTimes.value);
+  if (!times.length) { el.style.color = 'var(--red)'; el.textContent = 'Digite pelo menos um horário de sessão, por exemplo: 09:00, 14:00, 20:00'; return; }
+  const settings = { intervalMinutes: Number(f.intervalMinutes.value) || 60, activeStartHour: Number(f.activeStartHour.value), activeEndHour: Number(f.activeEndHour.value), maxPerDay: Number(f.maxPerDay.value), sessionTimes: f.sessionTimes.value };
+  const max = Number(f.perSessionMax.value) || 6;
+  const load = sessionLoad(settings);
+  const short = load.sessions.filter((x) => x.needed > max);
+  const hhmm = (x) => `${String(x.h).padStart(2, '0')}:${String(x.m).padStart(2, '0')}`;
+  el.style.color = short.length ? 'var(--yellow)' : '';
+  el.textContent = `${times.length} sessão(ões) por dia (${fmtSessionTimes(times)}) · o TikTok Studio é aberto ${times.length}x por dia em vez de ~${load.perDay}x · `
+    + load.sessions.map((x) => `${hhmm(x.at)}: ~${Math.min(x.needed, max)} vídeo(s)`).join(' · ')
+    + (short.length ? ` ⚠️ Na sessão das ${short.map((x) => hhmm(x.at)).join(', ')} seriam precisos ${short.map((x) => x.needed).join('/')} vídeos para não ficar sem post até a próxima: aumente o máximo por sessão ou adicione um horário.` : ' ✓ cobre o dia todo.');
 }
 const clamp = (n, lo, hi, d) => (Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : d);
 
@@ -568,6 +639,10 @@ async function saveSettings(e) {
   const d = DEFAULT_SETTINGS;
   const num = (k) => Number(f[k].value);
   const settings = {
+    publishMode: f.publishMode.value === 'now' ? 'now' : 'schedule',
+    sessionTimes: fmtSessionTimes(parseSessionTimes(f.sessionTimes.value)) || d.sessionTimes,
+    perSessionMax: clamp(num('perSessionMax'), 1, 20, d.perSessionMax),
+    sessionJitterMinutes: clamp(num('sessionJitterMinutes'), 0, 60, d.sessionJitterMinutes),
     intervalMinutes: clamp(num('intervalMinutes'), 5, 1440, 60),
     jitterMinutes: clamp(num("jitterMinutes"), 0, 60, d.jitterMinutes),
     maxPerDay: clamp(num('maxPerDay'), 1, 288, d.maxPerDay),
@@ -754,10 +829,15 @@ async function rescan() {
 
 // ---------- ações ----------
 async function toggleRun() {
-  if (S.runtime.running) { if ((await send('pause')).ok) toast('Pausado'); return; }
+  if (S.runtime.running) { if ((await send('pause')).ok) toast(isSched() ? 'Pausado. Os vídeos já agendados no TikTok continuam saindo — para cancelar, apague em Publicações no TikTok Studio.' : 'Pausado'); return; }
   if (folderPerm !== 'granted') { toast('Conecte a pasta de vídeos primeiro.', true); return; }
   if (!previewQueue(S, 1).length) { toast('Nada para postar: ligue as pastas a produtos do catálogo (tela Vídeos).', true); return; }
-  if ((await send('start')).ok) toast('Iniciado! O primeiro post sai em cerca de 1 minuto.');
+  const r = await send('start');
+  if (r.ok) {
+    if (!isSched()) toast('Iniciado! O primeiro post sai em cerca de 1 minuto.');
+    else if (r.nextSessionAt && r.nextSessionAt - Date.now() > 3 * 60000) toast(`Iniciado! A agenda já está coberta; a próxima sessão é por volta das ${fmtTime(r.nextSessionAt)}.`);
+    else toast('Iniciado! Em cerca de 1 minuto abro o TikTok Studio e agendo os próximos vídeos.');
+  }
 }
 async function dryRun(path) {
   if (!path && !previewQueue(S, 1).length) { toast('Nada para testar: ligue uma pasta com vídeos a um produto do catálogo.', true); return; }
@@ -830,15 +910,26 @@ document.addEventListener('click', async (e) => {
   if (t.dataset.dry) return dryRun(t.dataset.dry);
   if (t.dataset.skip) return send('set-video-status', { paths: [t.dataset.skip], status: 'skipped' });
   if (t.dataset.requeue) return send('set-video-status', { paths: [t.dataset.requeue], status: 'pending' });
+  if (t.dataset.requeueSched) {
+    if (!confirm('Esse vídeo já está agendado no TikTok. Voltar para a fila faz ele ser agendado de novo depois.\n\nApague o agendamento dele no TikTok Studio (Publicações) antes, para não sair duplicado. Continuar?')) return;
+    return send('set-video-status', { paths: [t.dataset.requeueSched], status: 'pending' });
+  }
   if (t.dataset.markPosted) return send('set-video-status', { paths: [t.dataset.markPosted], status: 'posted' });
   if (t.closest('#queueFilter')) { ui.queueFilter = t.dataset.f; return renderQueue(); }
   if (t.closest('#histFilter')) { ui.histFilter = t.dataset.f; return renderHistory(); }
+  if (t.closest('#modeSeg') && t.dataset.mode) { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; return setMode(t.dataset.mode); }
   if (t.closest('#intervalSeg')) { settingsDirty = true; $('#saveMsg').textContent = 'Alterações não salvas'; return setIntervalSeg(t.dataset.v); }
 });
 
 $('#btnToggle').onclick = toggleRun;
 $('#sideToggle').onclick = toggleRun;
 $('#btnNow').onclick = () => postNow();
+$('#btnSession').onclick = async () => {
+  if (folderPerm !== 'granted') { toast('Conecte a pasta de vídeos primeiro.', true); return; }
+  if (!previewQueue(S, 1).length) { toast('Nada para agendar: ligue as pastas a produtos do catálogo (tela Vídeos).', true); return; }
+  const r = await send('session-now');
+  if (r.ok) toast('Sessão iniciada: abrindo o TikTok Studio para agendar os próximos vídeos…');
+};
 $('#btnDry').onclick = () => dryRun();
 $('#btnCancel').onclick = () => send('cancel-job');
 $('#btnClearHist').onclick = async () => { if (confirm('Apagar todo o histórico?')) await send('clear-history'); };

@@ -182,3 +182,43 @@ test('ordem inteligente: alterna gancho, corpo e CTA (G#C#A#)', async () => {
   videos['l/LENCOL_G1C1A1_1711.mp4'].postedAt = 1;
   assert.notEqual(variantOf(pickNext(st).video.path).g, 1);
 });
+
+// ---------- modo agendamento ----------
+import { nextSlot, parseSessionTimes, computeNextSession, sessionHorizon, sessionLoad, countForDay } from '../lib/scheduler.js';
+
+const SCH = { intervalMinutes: 60, jitterMinutes: 0, activeStartHour: 8, activeEndHour: 23, maxPerDay: 4, sessionTimes: '09:00, 14:00, 20:00', sessionJitterMinutes: 0 };
+const at = (h, m = 0, d = 19) => new Date(2026, 10, d, h, m).getTime();
+
+test('parseSessionTimes aceita formatos variados e ordena', () => {
+  assert.deepEqual(parseSessionTimes('20:30, 9h; 14 ,9:00, 25:00, xx'), [{ h: 9, m: 0 }, { h: 14, m: 0 }, { h: 20, m: 30 }]);
+});
+
+test('nextSlot: múltiplos de 5 min, pelo menos 20 min no futuro, intervalo respeitado', () => {
+  const now = at(14, 7);
+  const a = nextSlot({ lastSlotAt: null, now, settings: SCH, history: [] });
+  assert.ok(a >= now + 20 * 60000);
+  assert.equal(new Date(a).getMinutes() % 5, 0);
+  const b = nextSlot({ lastSlotAt: a, now, settings: SCH, history: [] });
+  assert.equal(b - a, 60 * 60000);
+});
+
+test('nextSlot: fora da faixa de horário pula para a manhã seguinte', () => {
+  const s = nextSlot({ lastSlotAt: at(22, 30), now: at(20), settings: SCH, history: [] });
+  assert.equal(new Date(s).getDate(), 20);
+  assert.equal(new Date(s).getHours(), 8);
+});
+
+test('nextSlot: limite por dia conta pelo dia de publicação', () => {
+  const history = [10, 11, 12, 13].map((h) => ({ status: 'scheduled', publishAt: at(h), ts: at(9) }));
+  assert.equal(countForDay(history, at(15)), 4);
+  const s = nextSlot({ lastSlotAt: at(13), now: at(9), settings: SCH, history });
+  assert.equal(new Date(s).getDate(), 20);
+});
+
+test('sessões: próxima sessão e horizonte até a sessão seguinte + folga', () => {
+  assert.equal(computeNextSession(at(10), SCH), at(14));
+  assert.equal(computeNextSession(at(21), SCH), at(9, 0, 20));
+  assert.equal(sessionHorizon(at(14, 5), SCH), at(21, 30));
+  const load = sessionLoad({ ...SCH, maxPerDay: 99 });
+  assert.deepEqual(load.sessions.map((x) => x.needed), [5, 6, 4]);
+});

@@ -38,6 +38,22 @@
   <div id="productCard"></div>
   <h3>Definições</h3>
   <div class="settings-card">
+    <p>Quando publicar</p>
+    <label><input type="radio" name="when" id="whenNow" checked> <span>Agora</span></label>
+    <label><input type="radio" name="when" id="whenSched"> <span>Agendar</span></label>
+    <div id="schedFields" hidden style="display:flex;gap:10px;position:relative">
+      <div role="combobox" tabindex="0" id="dateBox" style="cursor:pointer;padding:6px;background:#eee"><span id="dateTxt"></span> ⌄</div>
+      <div role="combobox" tabindex="0" id="timeBox" style="cursor:pointer;padding:6px;background:#eee"><span id="timeTxt"></span> ⌄</div>
+      <div style="padding:6px">(GMT-3) Horário local</div>
+      <div id="cal" hidden style="position:absolute;top:36px;left:0;background:#fff;border:1px solid #ccc;padding:6px;z-index:5;width:240px">
+        <div style="display:flex;justify-content:space-between"><button type="button" id="calPrev" aria-label="prev">‹</button><b id="calTitle"></b><button type="button" id="calNext">›</button></div>
+        <div id="calDays" style="display:grid;grid-template-columns:repeat(7,1fr)"></div>
+      </div>
+      <div id="tp" hidden style="position:absolute;top:36px;left:120px;background:#fff;border:1px solid #ccc;z-index:5;display:flex">
+        <ul id="tpH" style="list-style:none;margin:0;padding:0 10px;height:150px;overflow-y:auto"></ul>
+        <ul id="tpM" style="list-style:none;margin:0;padding:0 10px;height:150px;overflow-y:auto"></ul>
+      </div>
+    </div>
     <p>Quem pode ver esta publicação</p>
     <button role="combobox" id="visibility">Todos ⌄</button>
     <div class="menu" id="visMenu" hidden><div role="option">Todos</div><div role="option">Amigos</div><div role="option">Só tu</div></div>
@@ -64,6 +80,13 @@
   </div>
   <button data-e2e="post_video_button" id="post" disabled>Publicar</button>
 </div>
+
+<div id="allowDlg" role="dialog" hidden>
+  <h3>Permitir que o teu vídeo seja guardado para publicação agendada?</h3>
+  <p>Quando agendas um vídeo, este deve estar guardado nos nossos servidores antes de ser publicado.</p>
+  <button id="allowCancel">Cancelar</button><button id="allowOk">Permitir</button>
+</div>
+<div class="player"><span>00:15</span></div>
 
 <!-- 1) Tipo de link -->
 <div id="m1" role="dialog" hidden>
@@ -246,6 +269,53 @@
   $('more').onclick = () => { $('advanced').hidden = false; $('more').firstElementChild.textContent = 'Mostrar menos'; R.events.push('show-more'); };
   $('visibility').onclick = () => { $('visMenu').hidden = !$('visMenu').hidden; R.events.push('visibility-menu'); };
   $('disc').addEventListener('change', () => { $('discOpts').hidden = !$('disc').checked; $('discWrap').style.background = $('disc').checked ? '#25f4ee' : '#ccc'; });
+  // ---- Agendar (como o TikTok: aviso "Permitir", calendário e colunas de hora/minuto de 5 em 5) ----
+  const MES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  const MESF = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+  const p2 = (n) => String(n).padStart(2, '0');
+  const sd = new Date(Math.ceil((Date.now() + 16 * 60000) / 300000) * 300000);
+  let calMonth = new Date(sd.getFullYear(), sd.getMonth(), 1);
+  R.untrusted = [];
+  document.addEventListener('click', (e) => { if (!e.isTrusted && e.target.id !== 'fileInput') R.untrusted.push(e.target.id || e.target.tagName); }, true);
+  function showSched() {
+    $('dateTxt').textContent = `${sd.getDate()} de ${MES[sd.getMonth()]} de ${sd.getFullYear()}`;
+    $('timeTxt').textContent = `${p2(sd.getHours())}:${p2(sd.getMinutes())}`;
+  }
+  $('whenSched').addEventListener('click', (e) => {
+    if (R.allowed) return;
+    e.preventDefault();
+    $('allowDlg').hidden = false;
+  });
+  $('whenNow').addEventListener('change', () => { $('schedFields').hidden = true; $('post').textContent = 'Publicar'; });
+  $('allowOk').onclick = () => {
+    R.allowed = true; $('allowDlg').hidden = true; $('whenSched').checked = true;
+    $('schedFields').hidden = false; $('schedFields').style.display = 'flex'; $('post').textContent = 'Agendar'; showSched();
+  };
+  $('allowCancel').onclick = () => { $('allowDlg').hidden = true; };
+  function drawCal() {
+    $('calTitle').textContent = `${MESF[calMonth.getMonth()]} ${calMonth.getFullYear()}`;
+    const first = calMonth.getDay();
+    const days = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate();
+    const prevDays = new Date(calMonth.getFullYear(), calMonth.getMonth(), 0).getDate();
+    const out = [];
+    for (let i = first - 1; i >= 0; i--) out.push(`<span class="other disabled" style="color:#bbb">${prevDays - i}</span>`);
+    for (let d = 1; d <= days; d++) out.push(`<span class="day" data-d="${d}" style="cursor:pointer">${d}</span>`);
+    $('calDays').innerHTML = out.join('');
+    $('calDays').querySelectorAll('.day').forEach((el) => el.onclick = () => {
+      sd.setFullYear(calMonth.getFullYear(), calMonth.getMonth(), Number(el.dataset.d)); showSched(); $('cal').hidden = true;
+    });
+  }
+  $('dateBox').onclick = () => { $('tp').hidden = true; $('cal').hidden = !$('cal').hidden; drawCal(); };
+  $('calNext').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1); drawCal(); };
+  $('calPrev').onclick = () => { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1); drawCal(); };
+  $('timeBox').onclick = () => {
+    $('cal').hidden = true; $('tp').hidden = !$('tp').hidden; if ($('tp').hidden) return;
+    $('tpH').innerHTML = Array.from({ length: 24 }, (_, h) => `<li style="padding:4px;cursor:pointer" data-h="${h}">${p2(h)}</li>`).join('');
+    $('tpM').innerHTML = Array.from({ length: 12 }, (_, i) => `<li style="padding:4px;cursor:pointer" data-m="${i * 5}">${p2(i * 5)}</li>`).join('');
+    $('tpH').querySelectorAll('li').forEach((li) => li.onclick = () => { sd.setHours(Number(li.dataset.h)); showSched(); });
+    $('tpM').querySelectorAll('li').forEach((li) => li.onclick = () => { sd.setMinutes(Number(li.dataset.m)); showSched(); $('tp').hidden = true; });
+  };
+
   $('post').onclick = () => { if (!$('post').disabled) $('confirm').hidden = false; };
   $('postNow').onclick = () => {
     if (Q.has('noconfirm')) { R.posted = true; R.caption = capState; $('confirm').hidden = true; return; }
@@ -253,6 +323,7 @@
     R.branded = $('branded').checked;
     R.own = $('own').checked;
     R.disclose = String($('disc').checked);
+    R.scheduled = $('whenSched').checked ? `${$('dateTxt').textContent} ${$('timeTxt').textContent}` : null;
     R.posted = true;
     $('confirm').hidden = true;
     history.pushState({}, '', '/tiktokstudio/content');

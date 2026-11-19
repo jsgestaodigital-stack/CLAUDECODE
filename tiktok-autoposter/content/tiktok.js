@@ -13,6 +13,7 @@
   let linkedProduct = null;
   let writtenCaption = null;
   let clickedPublish = false;
+  let scheduledAt = null;
   let aborted = false;
   let lastBeat = 0;
   let SPEED = 2.2;            // multiplicador das esperas ("humano" = mais devagar)
@@ -186,45 +187,160 @@
     return best || el;
   }
 
-  // Clique "humano": rola até o elemento, leva o mouse até ele em vários passos, para em cima
-  // um instante, pressiona, solta e só então clica.
-  async function click(el, { raw = false } = {}) {
-    if (!raw) el = clickable(el);
-    const r0 = el.getBoundingClientRect();
-    if (r0.top < 60 || r0.bottom > innerHeight - 60) {
+  // ---------- mouse e teclado de verdade ----------
+  // Os cliques, a rolagem e a digitação passam pelo próprio Chrome (protocolo de automação):
+  // para o TikTok são eventos "confiáveis", iguais aos de uma pessoa. Se o Chrome recusar
+  // (ex.: Ferramentas do desenvolvedor abertas na aba), cai no clique simulado e registra.
+  let trustedOk = true;
+
+  // Caminho do mouse em curva suave, com pequenos tremores, da posição atual até (x, y).
+  function mousePath(x, y) {
+    const pts = [];
+    if (!HUMAN) return pts;
+    const steps = Math.round(rnd(8, 18));
+    const cx = (lastMouse.x + x) / 2 + rnd(-80, 80);
+    const cy = (lastMouse.y + y) / 2 + rnd(-60, 60);
+    for (let i = 1; i < steps; i++) {
+      const k = i / steps;
+      const e = k * k * (3 - 2 * k);
+      const px = (1 - e) * (1 - e) * lastMouse.x + 2 * (1 - e) * e * cx + e * e * x;
+      const py = (1 - e) * (1 - e) * lastMouse.y + 2 * (1 - e) * e * cy + e * e * y;
+      pts.push({ x: Math.max(1, Math.min(innerWidth - 2, px + rnd(-1.5, 1.5))), y: Math.max(1, Math.min(innerHeight - 2, py + rnd(-1.5, 1.5))), w: rnd(10, 32) });
+    }
+    return pts;
+  }
+
+  const hiddenish = (el) => {
+    const r = el.getBoundingClientRect();
+    const st = getComputedStyle(el);
+    return r.width < 3 || r.height < 3 || Number(st.opacity) === 0 || st.visibility === 'hidden';
+  };
+
+  // Ponto dentro do elemento que realmente recebe o clique (nada cobrindo por cima).
+  function hitPoint(el) {
+    let t = el;
+    // <input> sem área (escondido) de interruptor/caixa: mira a parte visível em volta.
+    // Um <input> transparente mas com tamanho continua clicável: mira nele mesmo.
+    const noArea = (e) => { const r = e.getBoundingClientRect(); return r.width < 3 || r.height < 3 || getComputedStyle(e).visibility === 'hidden'; };
+    for (let i = 0; i < 3 && t.parentElement && noArea(t); i++) t = t.parentElement;
+    const r = t.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return null;
+    const lab = el.closest('label');
+    const okHit = (h) => h && (t.contains(h) || h.contains(el) || el.contains(h) || (lab && lab.contains(h))
+      || (hiddenish(el) && t.contains(h)));
+    for (let i = 0; i < 8; i++) {
+      const fx = i === 0 ? rnd(0.4, 0.6) : rnd(0.2, 0.8);
+      const fy = i === 0 ? rnd(0.4, 0.6) : rnd(0.25, 0.75);
+      const x = Math.min(innerWidth - 3, Math.max(2, r.left + r.width * fx));
+      const y = Math.min(innerHeight - 3, Math.max(2, r.top + r.height * fy));
+      if (okHit(document.elementFromPoint(x, y))) return { x, y };
+    }
+    return null;
+  }
+
+  async function trusted(msg) {
+    if (!trustedOk) return false;
+    try {
+      const r = await chrome.runtime.sendMessage(msg);
+      if (r?.ok) return true;
+      logAct(`⚠ mouse/teclado do Chrome indisponível (${r?.error || 'sem resposta'}) — usando clique simulado`);
+    } catch (e) {
+      logAct(`⚠ mouse/teclado do Chrome indisponível (${e.message}) — usando clique simulado`);
+    }
+    trustedOk = false;
+    return false;
+  }
+
+  // Rola a página com a rodinha do mouse (de verdade) até o elemento ficar visível.
+  function scroller(el) {
+    for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      const st = getComputedStyle(n);
+      if (/(auto|scroll)/.test(st.overflowY) && n.scrollHeight > n.clientHeight + 4) return n;
+    }
+    return null;
+  }
+  async function bringIntoView(el) {
+    const inView = () => { const r = el.getBoundingClientRect(); return r.top >= 70 && r.bottom <= innerHeight - 50; };
+    if (inView()) return;
+    if (HUMAN && trustedOk) {
+      for (let i = 0; i < 14 && !inView(); i++) {
+        const sc = scroller(el);
+        const box = sc ? sc.getBoundingClientRect() : { left: 0, top: 0, right: innerWidth, bottom: innerHeight };
+        const px = Math.min(innerWidth - 20, Math.max(20, box.left + (box.right - box.left) * rnd(0.3, 0.7)));
+        const py = Math.min(innerHeight - 20, Math.max(20, Math.max(0, box.top) + (Math.min(innerHeight, box.bottom) - Math.max(0, box.top)) * rnd(0.35, 0.65)));
+        const under = document.elementFromPoint(px, py);
+        if (!under || (sc ? !sc.contains(under) : scroller(under))) break; // a rodinha rolaria outra coisa
+        const r = el.getBoundingClientRect();
+        const dist = r.top + r.height / 2 - innerHeight / 2;
+        const total = Math.max(-900, Math.min(900, dist));
+        const n = Math.max(1, Math.round(Math.abs(total) / 110));
+        const deltas = Array.from({ length: n }, () => Math.round((total / n) * rnd(0.85, 1.15)));
+        const before = r.top;
+        if (!(await trusted({ type: 'cdp-mouse', points: mousePath(px, py), x: px, y: py, wheel: { deltas } }))) break;
+        lastMouse = { x: px, y: py };
+        await sleep(rnd(250, 500));
+        if (Math.abs(el.getBoundingClientRect().top - before) < 2) break; // não rolou
+      }
+    }
+    if (!inView()) {
       el.scrollIntoView({ block: 'center', inline: 'center', behavior: HUMAN ? 'smooth' : 'auto' });
       await human(350, 700);
     }
-    const r = el.getBoundingClientRect();
-    const x = r.left + r.width * rnd(0.35, 0.65);
-    const y = r.top + r.height * rnd(0.35, 0.65);
-    logAct(`🖱 clicando em ${describe(el)}`);
-    if (HUMAN) {
-      const steps = Math.round(rnd(6, 14));
-      for (let i = 1; i <= steps; i++) {
-        const k = i / steps;
-        const ease = k * k * (3 - 2 * k);
-        const mx = lastMouse.x + (x - lastMouse.x) * ease + rnd(-2, 2);
-        const my = lastMouse.y + (y - lastMouse.y) * ease + rnd(-2, 2);
-        const target = document.elementFromPoint(mx, my) || document.body;
-        target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window, clientX: mx, clientY: my }));
-        await sleep(rnd(12, 35));
+  }
+
+  // Clique "humano": rola até o elemento, leva o mouse até ele em curva, para em cima um instante,
+  // pressiona e solta — com o mouse do Chrome. Sem ele, usa eventos simulados.
+  async function click(el, { raw = false } = {}) {
+    if (!raw) el = clickable(el);
+    await bringIntoView(el);
+    // elemento sem área nenhuma (e que não é um <input> de rótulo): ninguém conseguiria clicar nele
+    // com o mouse — usa o clique simulado direto nele em vez de clicar no bloco em volta
+    const r0 = el.getBoundingClientRect();
+    const pt = (r0.width < 1 || r0.height < 1) && !el.matches('input') && !el.closest('label') ? null : hitPoint(el);
+    logAct(`🖱 clicando em ${describe(el)}${pt ? '' : ' (coberto/sem área visível: clique simulado)'}`);
+    if (pt && trustedOk) {
+      const ok = await trusted({ type: 'cdp-mouse', points: mousePath(pt.x, pt.y), x: pt.x, y: pt.y, hover: HUMAN ? rnd(140, 420) * (SPEED / 2.2) : 60, hold: rnd(60, 150) });
+      if (ok) {
+        lastMouse = pt;
+        await human(400, 900);
+        return;
       }
     }
-    lastMouse = { x, y };
+    syntheticClick(el);
+    await human(400, 900);
+  }
+
+  function syntheticClick(el) {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
     const opts = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
-    el.dispatchEvent(new PointerEvent('pointerover', { ...opts, pointerType: 'mouse' }));
-    el.dispatchEvent(new MouseEvent('mouseover', opts));
-    el.dispatchEvent(new PointerEvent('pointerenter', { ...opts, bubbles: false, pointerType: 'mouse' }));
-    el.dispatchEvent(new MouseEvent('mouseenter', { ...opts, bubbles: false }));
-    await human(120, 380);
     el.dispatchEvent(new PointerEvent('pointerdown', { ...opts, pointerType: 'mouse', isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mousedown', opts));
-    await sleep(rnd(60, 160));
     el.dispatchEvent(new PointerEvent('pointerup', { ...opts, pointerType: 'mouse', isPrimary: true }));
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.click();
-    await human(400, 900);
+  }
+
+  // Digitação de verdade num campo comum (busca, nome do produto): clica, Ctrl+A, apaga e digita
+  // aos poucos. Confere o valor no final; se não bater, preenche do jeito antigo.
+  async function typeTrusted(input, value) {
+    value = String(value);
+    logAct(`⌨ digitando "${value.slice(0, 60)}" em ${describe(input)}`);
+    await click(input);
+    const acts = [{ key: 'selectAll', wait: rnd(120, 300) }, { key: 'backspace', wait: rnd(200, 450) }];
+    const parts = HUMAN ? value.match(/.{1,2}/gsu) || [] : [value];
+    for (const p of parts) acts.push({ text: p, wait: HUMAN ? rnd(70, 220) : 20 });
+    if (trustedOk && (await trusted({ type: 'cdp-type', actions: acts }))) {
+      await human(200, 500);
+      if (input.value === value) return;
+      logAct(`⚠ o campo ficou "${String(input.value).slice(0, 60)}" — corrigindo`);
+    }
+    await typeInto(input, value);
+  }
+  async function pressEnter(el) {
+    if (trustedOk && (await trusted({ type: 'cdp-type', actions: [{ key: 'enter', wait: 100 }] }))) return;
+    key(el, 'Enter', 'Enter', 13);
   }
 
   function setInputValue(input, value) {
@@ -617,11 +733,10 @@
   // Digita a busca e espera a lista mudar e ficar estável (ou a mensagem "nenhum resultado").
   async function searchProducts(search, query) {
     const before = signature(readResults(topDialog()));
-    await click(search);
-    await typeInto(search, query);
+    await typeTrusted(search, query);
     await human(250, 600);
     logAct('⏎ Enter na busca');
-    key(search, 'Enter', 'Enter', 13);
+    await pressEnter(search);
     let rows = null;
     let stable = 0;
     let prevSig = null;
@@ -780,8 +895,7 @@
       const suggested = nameInput ? nameInput.value : '';
       if (nameInput && label && label.trim() && label.trim() !== suggested.trim()) {
         logAct(`nome no carrinho: "${label.slice(0, 30)}" (o TikTok sugeriu "${suggested}")`);
-        await click(nameInput);
-        await typeInto(nameInput, label.slice(0, 30));
+        await typeTrusted(nameInput, label.slice(0, 30));
       } else {
         logAct(`nome no carrinho: mantendo o sugerido pelo TikTok "${suggested}"`);
       }
@@ -888,7 +1002,15 @@
     const tries = [...new Set([inner, roleEl, ctrl, ctrl.closest('label'), ctrl.parentElement, textEl].filter(Boolean))];
     for (const t of tries) {
       logAct(`tentando ligar ${what}: ${describe(t)}`);
-      if (t.matches('input')) { t.focus(); t.click(); } else await click(t, { raw: true });
+      await click(t, { raw: true });
+      await human(700, 1200);
+      if (controlState(ctrl)) { logAct(`✓ ${what} ligado`); return; }
+    }
+    // último recurso: clique simulado direto no <input>
+    if (inner) {
+      logAct(`tentando ligar ${what}: clique simulado no <input>`);
+      inner.focus();
+      inner.click();
       await human(700, 1200);
       if (controlState(ctrl)) { logAct(`✓ ${what} ligado`); return; }
     }
@@ -906,7 +1028,7 @@
       }
       disclose = await waitFor(() => findByText(L.disclose)[0], { timeout: 10000, what: 'opção "Divulgar conteúdo do vídeo"' });
     }
-    disclose.scrollIntoView({ block: 'center', behavior: HUMAN ? 'smooth' : 'auto' });
+    await bringIntoView(disclose);
     await human(500, 900);
     const toggle = controlNear(disclose);
     if (!toggle) throw new Error('não achei o botão liga/desliga de "Divulga o conteúdo da publicação"');
@@ -929,10 +1051,215 @@
     logAct('✓ "Conteúdo de marca" marcado');
   }
 
+  // ---------- agendar ("Quando publicar: Agendar" + data + hora) ----------
+  const MONTHS = [
+    ['jan', 'janeiro', 'january'], ['fev', 'fevereiro', 'feb', 'february'], ['mar', 'marco', 'march'], ['abr', 'abril', 'apr', 'april'],
+    ['mai', 'maio', 'may'], ['jun', 'junho', 'june'], ['jul', 'julho', 'july'], ['ago', 'agosto', 'aug', 'august'],
+    ['set', 'setembro', 'sep', 'sept', 'september'], ['out', 'outubro', 'oct', 'october'], ['nov', 'novembro', 'november'], ['dez', 'dezembro', 'dec', 'december'],
+  ];
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fmtAt = (d) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  function monthIn(text) {
+    const words = tokens(text);
+    for (let i = 0; i < MONTHS.length; i++) if (words.some((w) => MONTHS[i].includes(w))) return i;
+    return -1;
+  }
+  const leafs = (root = document.body) => [...root.querySelectorAll('*')].filter((e) => !e.children.length && visible(e));
+  const numText = (e) => { const t = (e.textContent || '').trim(); return /^\d{1,2}$/.test(t) ? Number(t) : null; };
+
+  // Campo de hora ("14:25") e de data ("19 de nov de …") que aparecem depois de escolher "Agendar".
+  function scheduleFields() {
+    const outside = (e) => !e.closest('[role="dialog"], [aria-modal="true"], [contenteditable="true"], video, [class*="layer"], [class*="Player"], [class*="player"]');
+    const all = leafs();
+    const date = all.find((e) => /^\d{1,2}\s+(de\s+)?[a-zç]{3}/i.test((e.textContent || '').trim()) && monthIn(e.textContent) >= 0 && outside(e));
+    if (!date) return null;
+    // a hora é o campo "HH:MM" mais perto da data (o player do vídeo também mostra "00:15")
+    const d = date.getBoundingClientRect();
+    const time = all.filter((e) => /^\d{1,2}:\d{2}$/.test((e.textContent || '').trim()) && outside(e))
+      .map((e) => { const r = e.getBoundingClientRect(); return { e, dist: Math.abs(r.top - d.top) * 3 + Math.abs(r.left - d.left) }; })
+      .sort((a, b) => a.dist - b.dist)[0]?.e;
+    return time ? { time, date } : null;
+  }
+  const fieldBox = (el) => el.closest('input, [role="combobox"], [aria-haspopup], button, [tabindex]:not([tabindex="-1"])') || clickable(el);
+  function readField(el) {
+    const box = fieldBox(el);
+    const raw = ((box.matches('input') ? box.value : box.innerText) || el.textContent || '').replace(/\s+/g, ' ').trim();
+    const tm = raw.match(/\b(\d{1,2}):(\d{2})\b/);
+    if (tm && /^\D{0,3}\d{1,2}:\d{2}\D{0,3}$/.test(raw)) return `${pad2(tm[1])}:${tm[2]}`; // campo de hora ("18:05 ⌄" → "18:05")
+    return raw.replace(/[⌄˅▾▼]/g, '').trim();
+  }
+
+  // Liga o "Agendar" e confirma o aviso "Permitir que o teu vídeo seja guardado…".
+  async function chooseScheduleMode() {
+    const radioText = () => findByText(L.scheduleOption, { exact: true })
+      .filter((e) => !e.closest('button, [role="button"]') || e.closest('label, [role="radio"]'))
+      .find((e) => { const c = controlNear(e); return c && (c.matches('input[type="radio"], [role="radio"]') || c.querySelector?.('input[type="radio"]')); });
+    const label = await waitFor(radioText, { timeout: 20000, what: 'opção "Agendar" em "Quando publicar"' });
+    const radio = controlNear(label);
+    if (!controlState(radio)) {
+      await click(label);
+      await human(700, 1300);
+    }
+    // aviso de permissão (aparece na 1ª vez)
+    const dlg = await waitFor(() => {
+      const d = topDialog();
+      if (d && findByText(L.allowSchedule, { within: d, exact: true }).length) return d;
+      return scheduleFields() ? 'none' : null;
+    }, { timeout: 12000, what: 'aviso "Permitir" ou campos de data e hora' });
+    if (dlg !== 'none') {
+      logAct(`aviso do TikTok: "${(dlg.innerText || '').replace(/\s+/g, ' ').slice(0, 160)}" → Permitir`);
+      const ok = findByText(L.allowSchedule, { within: dlg, exact: true }).map(clickable).find((b) => !disabled(b));
+      await click(ok);
+      await human(800, 1400);
+    }
+    if (!controlState(radio)) {
+      await click(label);
+      await human(700, 1200);
+    }
+    if (!controlState(radio)) throw new Error('não consegui ligar a opção "Agendar"');
+    return waitFor(scheduleFields, { timeout: 15000, what: 'campos de data e hora do agendamento' });
+  }
+
+  // Elementos novos (números) que apareceram depois de abrir um seletor.
+  function newNumberLeafs(before) {
+    return leafs().filter((e) => numText(e) != null && !before.has(e) && !e.closest('[data-e2e="caption_container"]'));
+  }
+  async function closePicker() {
+    const head = findByText(L.whenToPost)[0];
+    if (head) await click(head, { raw: true });
+    else await pressEnter(document.body);
+    await human(400, 800);
+  }
+
+  async function pickDate(fields, target) {
+    const want = target.getDate();
+    const wantMonth = target.getMonth();
+    const cur = readField(fields.date);
+    const curDay = Number((cur.match(/^\D*(\d{1,2})/) || [])[1]);
+    const curMonth = monthIn(cur);
+    if (curDay === want && (curMonth < 0 || curMonth === wantMonth)) { logAct(`data já certa: "${cur}"`); return; }
+    const before = new Set(leafs().filter((e) => numText(e) != null));
+    await click(fieldBox(fields.date));
+    await human(600, 1100);
+    for (let flip = 0; flip < 3; flip++) {
+      const cells = await waitFor(() => { const c = newNumberLeafs(before).filter((e) => numText(e) <= 31); return c.length >= 20 ? c : null; }, { timeout: 8000, what: 'calendário' });
+      // células do mês mostrado: a sequência que começa no primeiro "1"
+      const first = cells.findIndex((e) => numText(e) === 1);
+      const run = [];
+      for (const c of cells.slice(first)) { if (numText(c) === run.length + 1) run.push(c); else if (run.length > 27) break; }
+      // descobre o mês mostrado pelo título do calendário
+      let root = cells[0];
+      for (let i = 0; i < 6 && root.parentElement && !(cells.every((c) => root.contains(c))); i++) root = root.parentElement;
+      for (let i = 0; i < 3 && root.parentElement && monthIn(root.innerText) < 0; i++) root = root.parentElement;
+      const shown = monthIn((root.innerText || '').split('\n').slice(0, 4).join(' '));
+      logAct(`calendário aberto (mês ${shown >= 0 ? MONTHS[shown][1] : '?'}, ${run.length} dias)`);
+      if (shown >= 0 && shown !== wantMonth) {
+        const btns = [...root.querySelectorAll('button, [role="button"], [class*="arrow"], [class*="Arrow"], [class*="next"], [class*="Next"], svg')]
+          .map((b) => clickable(b.closest('button, [role="button"]') || b)).filter((b) => visible(b) && !numText(b) && !(b.innerText || '').trim());
+        const next = btns.find((b) => /next|proxim|seguinte|right/i.test(`${b.getAttribute('aria-label') || ''} ${b.className?.baseVal ?? b.className}`)) || btns.sort((a, b) => b.getBoundingClientRect().left - a.getBoundingClientRect().left)[0];
+        if (!next) throw new Error('não achei a seta para o próximo mês no calendário');
+        logAct('calendário: indo para o próximo mês');
+        await click(next, { raw: true });
+        await human(500, 900);
+        continue;
+      }
+      const cell = run[want - 1];
+      if (!cell) throw new Error(`não achei o dia ${want} no calendário`);
+      if (disabled(cell) || disabled(cell.parentElement) || /disabled/i.test(String(cell.parentElement?.className))) throw new Error(`o dia ${want} está bloqueado no calendário do TikTok`);
+      await click(cell);
+      await human(600, 1000);
+      break;
+    }
+    if (newNumberLeafs(before).length >= 20) await closePicker();
+    const now = readField(scheduleFields()?.date || fields.date);
+    const d = Number((now.match(/^\D*(\d{1,2})/) || [])[1]);
+    const m = monthIn(now);
+    logAct(`data no campo: "${now}"`);
+    if (d !== want || (m >= 0 && m !== wantMonth)) throw new Error(`a data não ficou certa (queria ${pad2(want)}/${pad2(wantMonth + 1)}, ficou "${now}")`);
+  }
+
+  // Seletor de hora: duas colunas que rolam (horas e minutos de 5 em 5).
+  async function pickTime(fields, target) {
+    const want = `${pad2(target.getHours())}:${pad2(target.getMinutes())}`;
+    const norm5 = (t) => t.replace(/^(\d):/, '0$1:');
+    if (norm5(readField(fields.time)) === want) { logAct(`hora já certa: ${want}`); return; }
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const before = new Set(leafs().filter((e) => numText(e) != null));
+      const box = fieldBox(scheduleFields()?.time || fields.time);
+      await click(box);
+      await human(600, 1000);
+      const cols = await waitFor(() => {
+        const items = [...document.querySelectorAll('*')].filter((e) => !e.children.length && numText(e) != null && !before.has(e) && e.isConnected && e.getBoundingClientRect().width > 0);
+        const groups = new Map();
+        for (const it of items) { const k = it.closest('ul, ol, [role="listbox"]') || scroller(it) || it.parentElement; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(it); }
+        const g = [...groups.entries()].filter(([, v]) => v.length >= 4);
+        if (g.length < 2) return null;
+        const minutes = g.find(([, v]) => v.some((e) => numText(e) > 23)) || [...g].sort((a, b) => b[0].getBoundingClientRect().left - a[0].getBoundingClientRect().left)[0];
+        const hours = g.filter((x) => x !== minutes).sort((a, b) => a[0].getBoundingClientRect().left - b[0].getBoundingClientRect().left)[0];
+        return hours && minutes ? { hours, minutes } : null;
+      }, { timeout: 8000, what: 'lista de horas e minutos' });
+      for (const [name, [col], value] of [['hora', cols.hours, target.getHours()], ['minuto', cols.minutes, target.getMinutes()]]) {
+        let item = null;
+        for (let i = 0; i < 30 && !item; i++) {
+          item = [...col.querySelectorAll('*')].find((e) => !e.children.length && numText(e) === value);
+          if (item) break;
+          // lista virtual: rola a coluna até o número aparecer
+          const vals = [...col.querySelectorAll('*')].map(numText).filter((n) => n != null);
+          const sc = scroller(col.firstElementChild || col) || col;
+          sc.scrollTop += (vals.length && value < Math.min(...vals) ? -1 : 1) * 120;
+          await sleep(150);
+        }
+        if (!item) throw new Error(`não achei ${name} ${pad2(value)} no seletor de hora`);
+        if (disabled(item) || disabled(item.parentElement)) throw new Error(`${name} ${pad2(value)} está bloqueado no seletor (horário muito próximo?)`);
+        const sc = scroller(item);
+        if (sc) {
+          const r = item.getBoundingClientRect();
+          const b = sc.getBoundingClientRect();
+          if (r.top < b.top || r.bottom > b.bottom) { item.scrollIntoView({ block: 'center', behavior: HUMAN ? 'smooth' : 'auto' }); await human(300, 600); }
+        }
+        logAct(`seletor de hora: ${name} ${pad2(value)}`);
+        await click(item, { raw: true });
+        await human(500, 900);
+      }
+      if (newNumberLeafs(before).length >= 8) await closePicker();
+      const got = norm5(readField(scheduleFields()?.time || fields.time));
+      logAct(`hora no campo: "${got}"`);
+      if (got === want) return;
+      if (attempt === 2) throw new Error(`a hora não ficou certa (queria ${want}, ficou "${got}")`);
+    }
+  }
+
+  async function setSchedule(job) {
+    // o TikTok exige pelo menos 15 min de antecedência: se o formulário demorou, empurra o horário
+    let at = Number(job.scheduleAt);
+    const min = Math.ceil((Date.now() + 20 * 60000) / 300000) * 300000;
+    if (at < min) { logAct(`o horário ${fmtAt(new Date(at))} ficou perto demais → ${fmtAt(new Date(min))}`); at = min; }
+    const target = new Date(at);
+    logAct(`🗓 agendando para ${fmtAt(target)}`);
+    const fields = await chooseScheduleMode();
+    logAct(`campos: data "${readField(fields.date)}" · hora "${readField(fields.time)}"`);
+    await pickDate(fields, target);
+    await human(500, 900);
+    await pickTime(scheduleFields() || fields, target);
+    scheduledAt = at;
+    logAct(`✓ agendamento preenchido: ${fmtAt(target)}`);
+  }
+
   // ---------- publicar ----------
   async function publish() {
     const btn = await waitFor(() => { const b = findPostButton(); return b && !disabled(b) ? b : null; }, { timeout: 60000, what: 'botão Publicar habilitado' });
     await human(1200, 2500);
+    if (JOB?.scheduleAt) {
+      const t = norm(btn.innerText);
+      logAct(`botão final: "${(btn.innerText || '').trim()}"`);
+      if (t && !L.scheduleOption.some((w) => t.includes(norm(w)))) throw new Error(`o botão final diz "${(btn.innerText || '').trim()}" e não "Agendar" — não cliquei para não publicar na hora errada`);
+      const f = scheduleFields();
+      if (f && scheduledAt) {
+        const want = `${pad2(new Date(scheduledAt).getHours())}:${pad2(new Date(scheduledAt).getMinutes())}`;
+        const got = readField(f.time).replace(/^(\d):/, '0$1:');
+        if (got !== want) throw new Error(`a hora mudou antes de agendar (queria ${want}, está "${got}")`);
+      }
+    }
     const beforeText = norm(document.body.innerText);
     const beforePath = location.pathname;
     clickedPublish = true;
@@ -948,7 +1275,7 @@
         if (c) { await click(c); continue; }
       }
     }
-    throw new Error('cliquei em Publicar, mas não vi a confirmação de publicação');
+    throw new Error(`cliquei em ${JOB?.scheduleAt ? 'Agendar' : 'Publicar'}, mas não vi a confirmação`);
   }
 
   // Sucesso = a página foi para "Meus posts", ou apareceu uma mensagem de sucesso que não existia antes do clique.
@@ -974,6 +1301,8 @@
     linkedProduct = null;
     writtenCaption = null;
     clickedPublish = false;
+    scheduledAt = null;
+    trustedOk = true;
     aborted = false;
     pageError = null;
     HUMAN = job.speed !== 'normal';
@@ -996,19 +1325,20 @@
       if (job.linkProduct && (job.productId || job.productQuery)) await step('Vinculando o produto (carrinho)', () => linkProduct(job));
       if (job.brandedContent) await step('Marcando "Conteúdo de marca"', () => markBrandedContent());
       await dismissPopups();
+      if (job.scheduleAt) await step('Escolhendo data e hora (Agendar)', () => setSchedule(job));
       if (job.dryRun) {
-        logAct('✅ teste concluído — nada foi publicado');
-        report('job-result', { jobId: job.id, ok: true, step: 'Teste concluído (não publicado)', log: fmtLog(), linkedProduct });
+        logAct(`✅ teste concluído — nada foi ${job.scheduleAt ? 'agendado' : 'publicado'}`);
+        report('job-result', { jobId: job.id, ok: true, step: 'Teste concluído (não publicado)', log: fmtLog(), linkedProduct, scheduledAt });
         return;
       }
       checkCaptionBeforePublish();
-      await step('Publicando', () => publish());
-      logAct('✅ publicado');
-      report('job-result', { jobId: job.id, ok: true, step: 'Publicado', url: location.href, log: fmtLog(), linkedProduct });
+      await step(job.scheduleAt ? 'Agendando' : 'Publicando', () => publish());
+      logAct(job.scheduleAt ? `✅ agendado para ${fmtAt(new Date(scheduledAt))}` : '✅ publicado');
+      report('job-result', { jobId: job.id, ok: true, step: job.scheduleAt ? 'Agendado' : 'Publicado', url: location.href, log: fmtLog(), linkedProduct, scheduledAt });
     } catch (e) {
       if (aborted) return;
       logAct(`❌ ${e.message || e}`);
-      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), linkedProduct, clickedPublish, loggedOut: !clickedPublish && !pageError && isLoggedOut(), pageError: !!pageError, unavailable: !!e.unavailable });
+      report('job-result', { jobId: job.id, ok: false, error: e.message || String(e), step: currentStep, diag: diagnose(), log: fmtLog(), linkedProduct, clickedPublish, scheduledAt, loggedOut: !clickedPublish && !pageError && isLoggedOut(), pageError: !!pageError, unavailable: !!e.unavailable });
     }
   }
 
@@ -1019,6 +1349,7 @@
     actLog = [];
     pendingLog = [];
     aborted = false;
+    trustedOk = true;
     pageError = null;
     HUMAN = job.speed !== 'normal';
     SPEED = HUMAN ? 1.6 : 1;

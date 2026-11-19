@@ -67,6 +67,7 @@
       </div>
       <div class="actions">
         <button class="btn" id="btnDry" title="Preenche tudo no TikTok Studio, mas NÃO publica"><svg class="i"><use href="#i-flask"/></svg>Testar sem publicar</button>
+        <button class="btn" id="btnSession" title="Abre o TikTok Studio agora e agenda os próximos vídeos" hidden><svg class="i"><use href="#i-calendar"/></svg>Agendar agora</button>
         <button class="btn" id="btnNow" title="Publica o próximo vídeo da fila agora"><svg class="i"><use href="#i-send"/></svg>Postar agora</button>
         <button class="btn primary" id="btnToggle"></button>
       </div>
@@ -86,11 +87,11 @@
 
       <div class="stats">
         <div class="stat hero">
-          <span class="label">Próximo post</span>
+          <span class="label" id="stNextLabel">Próximo post</span>
           <span class="value" id="stNext">—</span>
           <span class="sub" id="stNextAt"></span>
         </div>
-        <div class="stat"><span class="label">Postados hoje</span><span class="value" id="stToday">0</span><span class="sub" id="stTodayMax"></span></div>
+        <div class="stat"><span class="label">Publicações hoje</span><span class="value" id="stToday">0</span><span class="sub" id="stTodayMax"></span></div>
         <div class="stat"><span class="label">Na fila</span><span class="value" id="stPending">0</span><span class="sub" id="stProducts"></span></div>
         <div class="stat"><span class="label">Falhas (24h)</span><span class="value" id="stFails">0</span><span class="sub" id="stTotal"></span></div>
       </div>
@@ -144,6 +145,7 @@
       <div class="toolbar">
         <div class="seg" id="queueFilter" role="tablist" aria-label="Filtrar vídeos">
           <button data-f="pending" class="on">Pendentes</button>
+          <button data-f="scheduled">Agendados</button>
           <button data-f="posted">Postados</button>
           <button data-f="failed">Com falha</button>
           <button data-f="unconfirmed">Verificar</button>
@@ -166,6 +168,8 @@
       <div class="toolbar">
         <div class="seg" id="histFilter" role="tablist" aria-label="Filtrar histórico">
           <button data-f="all" class="on">Tudo</button>
+          <button data-f="scheduled">Agendados</button>
+          <button data-f="session">Sessões</button>
           <button data-f="posted">Publicados</button>
           <button data-f="failed">Falhas</button>
           <button data-f="unconfirmed">Verificar</button>
@@ -181,9 +185,27 @@
     <section class="view" id="view-settings" hidden>
       <form id="settingsForm" class="settings" novalidate>
         <div class="card">
-          <h2><svg class="i"><use href="#i-calendar"/></svg>Frequência</h2>
+          <h2><svg class="i"><use href="#i-shield"/></svg>Como publicar</h2>
+          <div class="seg big" id="modeSeg" role="radiogroup" aria-label="Como publicar">
+            <button type="button" data-mode="schedule">🗓 Agendar pelo TikTok (recomendado)</button>
+            <button type="button" data-mode="now">⚡ Publicar na hora</button>
+          </div>
+          <input type="hidden" name="publishMode">
+          <p class="muted small" id="modeExplain" style="margin:10px 0 0"></p>
+          <div id="sessionBox">
+            <div class="row3" style="margin-top:14px">
+              <label class="field"><span>Horários das sessões</span><input type="text" name="sessionTimes" placeholder="09:00, 14:00, 20:00" autocomplete="off"><small>Separe por vírgula. Só nesses horários a extensão abre o TikTok Studio.</small></label>
+              <label class="field"><span>Máximo de vídeos por sessão</span><input type="number" name="perSessionMax" min="1" max="20"></label>
+              <label class="field"><span>Atraso aleatório da sessão (min)</span><input type="number" name="sessionJitterMinutes" min="0" max="60"><small>Cada sessão começa de 0 a N min depois do horário.</small></label>
+            </div>
+            <small id="sessionHint"></small>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2><svg class="i"><use href="#i-calendar"/></svg>Frequência das publicações</h2>
           <div class="field">
-            <span>Postar a cada</span>
+            <span>Publicar um vídeo a cada</span>
             <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
               <div style="display:flex;align-items:center;gap:8px"><input type="number" name="intervalMinutes" id="intervalInput" min="5" max="1440" step="1" style="width:120px;font-size:18px;font-weight:700" aria-label="Minutos entre posts"><b>minutos</b></div>
               <div class="seg" id="intervalSeg" aria-label="Atalhos de intervalo">
@@ -203,8 +225,8 @@
             <label class="field"><span>Hashtags por post</span><input type="number" name="hashtagsCount" min="0" max="10"></label>
           </div>
           <div class="row3">
-            <label class="field"><span>Postar a partir de</span><select name="activeStartHour"></select></label>
-            <label class="field"><span>Postar até</span><select name="activeEndHour"></select></label>
+            <label class="field"><span>Publicar a partir de</span><select name="activeStartHour"></select></label>
+            <label class="field"><span>Publicar até</span><select name="activeEndHour"></select></label>
             <label class="field"><span>Ordem dos vídeos</span>
               <select name="videoOrder"><option value="smart">Inteligente — alterna gancho, corpo e CTA (nomes com G1C2A1)</option><option value="name">Pelo nome do arquivo</option><option value="random">Aleatória</option></select>
             </label>

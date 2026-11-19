@@ -38,9 +38,134 @@ export function startOfDay(ts) {
   return d.getTime();
 }
 
+// Publicações de um dia: as publicadas na hora e as agendadas para aquele dia (pelo horário de publicação).
+export function countForDay(history, dayTs) {
+  const start = startOfDay(dayTs);
+  const end = start + 24 * 60 * MIN;
+  return (history || []).filter((h) => {
+    if (h.status !== 'posted' && h.status !== 'scheduled') return false;
+    const t = h.publishAt || h.ts;
+    return t >= start && t < end;
+  }).length;
+}
 export function countPostedToday(history, now = Date.now()) {
-  const start = startOfDay(now);
-  return history.filter((h) => h.status === 'posted' && h.ts >= start).length;
+  return countForDay(history, now);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Modo agendamento
+//   As SESSÕES são os poucos momentos do dia em que a extensão abre o TikTok Studio (horários
+//   escolhidos por você). Em cada sessão ela agenda os próximos vídeos nos HORÁRIOS DE PUBLICAÇÃO,
+//   que seguem o intervalo, a variação, o horário permitido e o limite por dia.
+// ---------------------------------------------------------------------------------------------
+export const SLOT_STEP_MIN = 5;   // o seletor de hora do TikTok anda de 5 em 5 minutos
+export const MIN_LEAD_MIN = 20;   // o TikTok exige pelo menos 15 min de antecedência
+export const SESSION_COVER_MIN = 90; // cada sessão cobre até a próxima sessão + esta folga
+
+export function ceilToStep(ts, stepMin = SLOT_STEP_MIN) {
+  const step = stepMin * MIN; // fusos do Brasil são horas cheias: múltiplos de 5 min batem com o relógio
+  return Math.ceil(ts / step) * step;
+}
+
+// "09:00, 14h, 20:30" → [{h:9,m:0}, {h:14,m:0}, {h:20,m:30}] (ordenado, sem repetidos)
+export function parseSessionTimes(text) {
+  const out = [];
+  for (const part of String(text || '').split(/[,;\s]+/)) {
+    const m = part.trim().match(/^(\d{1,2})(?:[:hH.](\d{2})?)?$/);
+    if (!m) continue;
+    const h = Number(m[1]);
+    const mi = Number(m[2] || 0);
+    if (h > 23 || mi > 59) continue;
+    if (!out.some((x) => x.h === h && x.m === mi)) out.push({ h, m: mi });
+  }
+  return out.sort((a, b) => a.h - b.h || a.m - b.m);
+}
+export const fmtSessionTimes = (list) => list.map((x) => `${String(x.h).padStart(2, '0')}:${String(x.m).padStart(2, '0')}`).join(', ');
+
+// Próximo horário de sessão (sem a variação) estritamente depois de fromTs.
+export function nextSessionBase(fromTs, settings) {
+  const times = parseSessionTimes(settings.sessionTimes);
+  if (!times.length) return null;
+  for (let day = 0; day < 3; day++) {
+    for (const t of times) {
+      const d = new Date(fromTs);
+      d.setDate(d.getDate() + day);
+      d.setHours(t.h, t.m, 0, 0);
+      if (d.getTime() > fromTs) return d.getTime();
+    }
+  }
+  return null;
+}
+
+// Próxima sessão com a variação aleatória (0 a N min depois do horário).
+export function computeNextSession(fromTs, settings, rand = Math.random) {
+  const base = nextSessionBase(fromTs, settings);
+  if (base == null) return null;
+  const j = Math.max(0, Math.min(60, Number(settings.sessionJitterMinutes) || 0));
+  return base + Math.round(rand() * j * MIN);
+}
+
+// Até quando uma sessão iniciada em `now` deve deixar posts agendados.
+export function sessionHorizon(now, settings) {
+  const next = nextSessionBase(now + 30 * MIN, settings) ?? now + 8 * 60 * MIN;
+  return next + SESSION_COVER_MIN * MIN;
+}
+
+// Próximo horário de publicação: último agendado + intervalo ± variação, arredondado para
+// 5 min, com antecedência mínima, dentro do horário permitido e respeitando o limite por dia.
+export function nextSlot({ lastSlotAt, now = Date.now(), settings, history = [], leadMin = MIN_LEAD_MIN, rand = Math.random }) {
+  const interval = Math.max(5, Number(settings.intervalMinutes) || 60);
+  const jitterMax = Math.min(Number(settings.jitterMinutes) || 0, Math.floor(interval / 3));
+  const earliest = now + leadMin * MIN;
+  let t = lastSlotAt ? lastSlotAt + (interval + (rand() * 2 - 1) * jitterMax) * MIN : earliest;
+  if (t < earliest) t = earliest;
+  if (lastSlotAt && t < lastSlotAt + SLOT_STEP_MIN * MIN) t = lastSlotAt + SLOT_STEP_MIN * MIN;
+  // arredonda para o múltiplo de 5 min mais próximo (sem ficar antes do mínimo)
+  const step = SLOT_STEP_MIN * MIN;
+  const min = Math.max(earliest, lastSlotAt ? lastSlotAt + step : 0);
+  t = Math.round(t / step) * step;
+  if (t < min) t = ceilToStep(min);
+  const maxPerDay = Number(settings.maxPerDay) || 999;
+  for (let i = 0; i < 40; i++) {
+    const d = new Date(t);
+    if (!isWithinActiveHours(d, settings.activeStartHour, settings.activeEndHour)) {
+      t = ceilToStep(nextActiveStart(d, settings.activeStartHour).getTime() + Math.floor(rand() * Math.max(1, jitterMax)) * MIN);
+      continue;
+    }
+    if (countForDay(history, t) >= maxPerDay) {
+      const tomorrow = new Date(t);
+      tomorrow.setHours(24, 0, 0, 0);
+      t = isWithinActiveHours(tomorrow, settings.activeStartHour, settings.activeEndHour)
+        ? ceilToStep(tomorrow.getTime() + Math.floor(rand() * Math.max(1, jitterMax)) * MIN)
+        : ceilToStep(nextActiveStart(tomorrow, settings.activeStartHour).getTime() + Math.floor(rand() * Math.max(1, jitterMax)) * MIN);
+      continue;
+    }
+    return t;
+  }
+  return null;
+}
+
+// Estima quantos vídeos cada sessão precisa agendar para não ficar buraco até a próxima.
+// Devolve [{ at:{h,m}, needed }] — usado no painel para avisar quando o máximo por sessão é pouco.
+export function sessionLoad(settings) {
+  const times = parseSessionTimes(settings.sessionTimes);
+  const interval = Math.max(5, Number(settings.intervalMinutes) || 60);
+  const maxPerDay = Number(settings.maxPerDay) || 999;
+  const out = [];
+  let perDay = 0;
+  times.forEach((t, i) => {
+    const n = times[(i + 1) % times.length];
+    let gap = (n.h * 60 + n.m) - (t.h * 60 + t.m);
+    if (gap <= 0) gap += 24 * 60;
+    let needed = 0;
+    for (let m = 0; m < gap; m += interval) {
+      const h = Math.floor(((t.h * 60 + t.m + m) % (24 * 60)) / 60);
+      if (isWithinActiveHours(new Date(2000, 0, 1, h), settings.activeStartHour, settings.activeEndHour)) needed++;
+    }
+    perDay += needed;
+    out.push({ at: t, next: n, gapMin: gap, needed });
+  });
+  return { sessions: out, perDay: Math.min(perDay, maxPerDay) };
 }
 
 // Variação do vídeo pelo nome do arquivo: G = gancho, C = corpo, A = CTA (ex.: LENCOL_G1C2A1.mp4).
@@ -192,7 +317,7 @@ export function pickNext(state, opts = {}) {
   if ((settings.videoOrder || 'smart') === 'smart' && list.some((v) => variantOf(v.path))) {
     // últimos postados deste produto (do mais recente ao mais antigo), mais os simulados na prévia
     const posted = Object.values(videos)
-      .filter((v) => v.status === 'posted' && productKeyOf(state, v) === product && variantOf(v.path))
+      .filter((v) => (v.status === 'posted' || v.status === 'scheduled') && productKeyOf(state, v) === product && variantOf(v.path))
       .sort((a, b) => (b.postedAt || 0) - (a.postedAt || 0));
     const recent = [...(opts.recentByProduct?.[product] || []), ...posted.map((v) => variantOf(v.path))];
     const usage = {};
@@ -257,10 +382,11 @@ export function mergeScan(state, files, now = Date.now()) {
   }
   let missing = 0;
   for (const [path, v] of Object.entries(videos)) {
-    if (!seen.has(path) && v.status !== 'missing' && v.status !== 'posted') {
+    const done = v.status === 'posted' || v.status === 'scheduled';
+    if (!seen.has(path) && v.status !== 'missing' && !done) {
       videos[path] = { ...v, status: 'missing' };
       missing++;
-    } else if (!seen.has(path) && v.status === 'posted' && !v.gone) {
+    } else if (!seen.has(path) && done && !v.gone) {
       videos[path] = { ...v, gone: true };
     }
   }
